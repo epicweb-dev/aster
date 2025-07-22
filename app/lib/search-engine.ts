@@ -1,110 +1,66 @@
 import {
-	CreateMLCEngine,
-	type MLCEngine,
-	type InitProgressCallback,
+	type ChatCompletionMessageParam,
+	type ChatCompletionTool,
 } from '@mlc-ai/web-llm'
-import { toolRegistry } from './tools'
+import { getAvailableTools, getTool } from './tools.js'
 
-// Tool definition type
-export type ToolDefinition = {
-	name: string
-	description: string
-	parameters: {
-		type: string
-		properties: Record<string, any>
-		required: string[]
+// Lazy initialization for web-llm engine
+let engine: any = null
+let isInitializing = false
+
+async function initializeEngine() {
+	if (engine || isInitializing) return engine
+
+	isInitializing = true
+
+	try {
+		const { CreateMLCEngine } = await import('@mlc-ai/web-llm')
+
+		// Create the engine
+		engine = await CreateMLCEngine('Hermes-2-Pro-Llama-3-8B-q4f16_1-MLC')
+
+		return engine
+	} catch (error) {
+		console.error('Failed to initialize web-llm engine:', error)
+		throw error
+	} finally {
+		isInitializing = false
 	}
 }
 
-// Search result type
-export type SearchResult = {
-	tool: ToolDefinition
-	relevanceScore: number
-	reasoning: string
-}
-
-// Search engine configuration
-export type SearchEngineConfig = {
-	modelId: string
-	temperature: number
-	maxResults: number
-	relevanceThreshold: number
-	maxQueryLength: number
-}
-
-export class SearchEngine {
-	#engine: MLCEngine | null = null
-	#config: SearchEngineConfig
-	#isInitializing = false
-
-	constructor(config: Partial<SearchEngineConfig> = {}) {
-		this.#config = {
-			modelId: 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
-			temperature: 0.1,
-			maxResults: 5,
-			relevanceThreshold: 0.7,
-			maxQueryLength: 2000,
-			...config,
-		}
-	}
-
-	// Initialize the search engine with a specific model
-	async initialize(
-		modelId?: string,
-		progressCallback?: InitProgressCallback,
-	): Promise<void> {
-		if (this.#isInitializing) return
-
-		this.#isInitializing = true
-
-		try {
-			const modelToUse = modelId || this.#config.modelId
-
-			this.#engine = await CreateMLCEngine(modelToUse, {
-				initProgressCallback: progressCallback,
-			})
-		} catch (error) {
-			console.error('Failed to initialize search engine:', error)
-			throw error
-		} finally {
-			this.#isInitializing = false
-		}
-	}
-
-	// Get tools from the tool registry
-	getTools(): ToolDefinition[] {
-		return toolRegistry.getAllDefinitions()
-	}
-
-	// Search for relevant tools based on user query or conversation context
-	// The query can be a simple search term or a full conversation history
-	async search(query: string): Promise<SearchResult[]> {
-		// Wait for the search engine to be ready
-		await this.#waitForReady()
-
-		const tools = this.getTools()
-		if (tools.length === 0) {
+export async function search(messages: Array<ChatCompletionMessageParam>) {
+	try {
+		// Initialize the engine if needed
+		const llmEngine = await initializeEngine()
+		if (!llmEngine) {
+			console.warn('Web-LLM engine not available, returning no tools')
 			return []
 		}
 
-		// Create a prompt for the LLM to evaluate tool relevance
-		const toolsDescription = tools
-			.map((tool, index) => `${index + 1}. ${tool.name}: ${tool.description}`)
+		// Get all available tool definitions from the registry
+		const allToolDefinitions = await getAvailableTools()
+
+		// Build conversation context from messages
+		const conversationContext = messages
+			.map((msg) => `${msg.role}: ${msg.content}`)
 			.join('\n')
 
-		// Truncate very long queries to avoid token limits
-		const truncatedQuery =
-			query.length > this.#config.maxQueryLength
-				? query.substring(0, this.#config.maxQueryLength) + '...'
-				: query
+		// Create tools description for the prompt
+		const toolsDescription = allToolDefinitions
+			.map(
+				(tool, index) =>
+					`${index + 1}. ${tool.function.name}: ${tool.function.description}`,
+			)
+			.join('\n')
 
-		const searchPrompt = `You are a tool search engine. Given a conversation context, evaluate which tools are most relevant for the current user request.
+		// Create the search prompt
+		const searchPrompt = `You are a tool recommendation engine. Given a conversation context, evaluate which tools are most relevant for the current user request.
 
 Available tools:
 ${toolsDescription}
 
 Conversation context:
-${truncatedQuery}
+${conversationContext}
 
 For each relevant tool, provide:
 1. Tool name
@@ -116,8 +72,8 @@ Format your response as a JSON array of objects with these fields:
 - relevance_score: number (0.0 to 1.0)
 - reasoning: string
 
-Only include tools with relevance scores >= ${this.#config.relevanceThreshold}.
-Return at most ${this.#config.maxResults} tools, sorted by relevance score (highest first).
+Only include tools with relevance scores >= 0.7.
+Return at most 5 tools, sorted by relevance score (highest first).
 
 Here is an example of a response:
 [{"tool_name":"alert","relevance_score":1.0,"reasoning":"The user is asking to display an alert message."}]
@@ -125,131 +81,74 @@ Here is an example of a response:
 If no tools are relevant, return an empty array:
 []
 
-Do not include any other text in your response.
+Do not include any other text in your response.`
 
-Response:`
+		console.log('performing search with the following prompt', searchPrompt)
+		// Send the search prompt to the LLM
+		const response = await llmEngine.chat.completions.create({
+			messages: [{ role: 'user', content: searchPrompt }],
+			temperature: 0.1, // Low temperature for more consistent results
+			max_tokens: 1000,
+			stream: false,
+		})
+		console.log('search performed, got the following response', response)
 
-		try {
-			console.log('[SearchEngine]: creating completion', searchPrompt)
-			const response = await this.#engine!.chat.completions.create({
-				messages: [{ role: 'user', content: searchPrompt }],
-				temperature: this.#config.temperature,
-				max_tokens: 1000,
-			})
-			console.log('[SearchEngine]: response', response)
-
-			const content = response.choices[0]?.message?.content
-			if (!content) {
-				return []
-			}
-
-			// Parse the JSON response
-			try {
-				const results = JSON.parse(content) as Array<{
-					tool_name: string
-					relevance_score: number
-					reasoning: string
-				}>
-
-				// Convert to SearchResult format
-				return results
-					.filter((result) => {
-						const tool = tools.find((t) => t.name === result.tool_name)
-						return (
-							tool && result.relevance_score >= this.#config.relevanceThreshold
-						)
-					})
-					.map((result) => {
-						const tool = tools.find((t) => t.name === result.tool_name)!
-						return {
-							tool,
-							relevanceScore: result.relevance_score,
-							reasoning: result.reasoning,
-						}
-					})
-					.sort((a, b) => b.relevanceScore - a.relevanceScore)
-					.slice(0, this.#config.maxResults)
-			} catch (parseError) {
-				console.error('Failed to parse search results:', parseError, content)
-				return []
-			}
-		} catch (error) {
-			console.error('Search failed:', error)
+		const responseContent = response.choices[0]?.message?.content
+		if (!responseContent) {
+			console.warn('No response content from LLM. Returning no tools.')
 			return []
 		}
-	}
 
-	// Wait for the search engine to be ready
-	async #waitForReady(): Promise<void> {
-		while (!this.#engine || this.#isInitializing) {
-			await new Promise((resolve) => setTimeout(resolve, 100))
+		// Parse the JSON response
+		try {
+			const results = JSON.parse(responseContent) as Array<{
+				tool_name: string
+				relevance_score: number
+				reasoning: string
+			}>
+
+			// Filter and sort results
+			const relevantTools = results
+				.filter((result) => result.relevance_score >= 0.7)
+				.sort((a, b) => b.relevance_score - a.relevance_score)
+				.slice(0, 5)
+
+			// Convert tool names to ChatCompletionTool objects
+			const recommendedTools: Array<
+				ChatCompletionTool & {
+					relevanceScore: number
+					llmDescription: string
+				}
+			> = []
+
+			for (const result of relevantTools) {
+				// First try to find in the new tool registry
+				const registryTool = await getTool(result.tool_name)
+				if (registryTool) {
+					recommendedTools.push({
+						type: 'function',
+						relevanceScore: result.relevance_score,
+						llmDescription: `<tool><name>${registryTool.function.name}</name><description>${registryTool.function.description}</description><parameters>${JSON.stringify(registryTool.function.parameters)}</parameters></tool>`,
+						function: {
+							name: registryTool.function.name,
+							description: registryTool.function.description,
+							parameters: registryTool.function.parameters,
+						},
+					})
+				}
+			}
+
+			return recommendedTools
+		} catch (parseError) {
+			console.error(
+				'Failed to parse search results:',
+				parseError,
+				responseContent,
+			)
+			return []
 		}
+	} catch (error) {
+		console.error('Search failed:', error)
+		return []
 	}
-
-	// Get all available tools
-	getAllTools(): ToolDefinition[] {
-		return this.getTools()
-	}
-
-	// Update configuration
-	updateConfig(newConfig: Partial<SearchEngineConfig>): void {
-		this.#config = { ...this.#config, ...newConfig }
-	}
-
-	// Get current configuration
-	getConfig(): SearchEngineConfig {
-		return { ...this.#config }
-	}
-
-	// Check if the search engine is ready
-	isReady(): boolean {
-		return this.#engine !== null && !this.#isInitializing
-	}
-
-	// Get initialization status
-	getInitializationStatus(): { isInitializing: boolean; isReady: boolean } {
-		return {
-			isInitializing: this.#isInitializing,
-			isReady: this.isReady(),
-		}
-	}
-
-	// Build conversation context from messages
-	static buildConversationContext(
-		messages: Array<{ sender: string; text: string }>,
-		currentQuery: string,
-	): string {
-		const conversationHistory = messages
-			.map((msg) => `${msg.sender}: ${msg.text}`)
-			.join('\n')
-		return `${conversationHistory}\n\nCurrent query: ${currentQuery}`
-	}
-}
-
-// Create a singleton instance
-export const searchEngine = new SearchEngine()
-
-// Legacy functions for backward compatibility
-export function createToolDefinition(
-	name: string,
-	description: string,
-	parameters: Record<string, any>,
-): ToolDefinition {
-	return {
-		name,
-		description,
-		parameters: {
-			type: 'object',
-			properties: parameters,
-			required: Object.keys(parameters).filter(
-				(key) => parameters[key].required !== false,
-			),
-		},
-	}
-}
-
-export function registerDefaultTools(searchEngineInstance: SearchEngine): void {
-	// Tools are now registered in the tool registry, so this function is a no-op
-	// It's kept for backward compatibility
-	console.log('Tools are now managed by the tool registry')
 }

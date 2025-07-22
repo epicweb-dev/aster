@@ -1,6 +1,6 @@
 import { createActor, type ActorRefFrom } from 'xstate'
 import { useSelector } from '@xstate/react'
-import { chatMachine } from '../lib/web-llm/chat-machine'
+import { chatMachine } from '../lib/chat-machine'
 import { type Route } from './+types/chat'
 import { useAutoScroll } from '../lib/use-autoscroll'
 
@@ -15,7 +15,7 @@ export async function clientLoader(): Promise<{
 	// Trigger actual model loading by sending LOAD_MODEL event
 	actor.send({
 		type: 'LOAD_MODEL',
-		modelId: 'Hermes-2-Pro-Llama-3-8B-q4f16_1-MLC',
+		modelId: 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
 	})
 
 	return { actor }
@@ -41,7 +41,7 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 								Chat with WebLLM (Merged)
 							</h1>
 							<p className="text-sm text-gray-600 dark:text-gray-400">
-								Powered by XState v5 and React Router v7 - Single Machine
+								Using {state.modelId}
 							</p>
 						</div>
 						{/* Loading indicator */}
@@ -94,31 +94,67 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 							className={`max-w-sm rounded-lg px-4 py-2 lg:max-w-md ${
 								message.role === 'user'
 									? 'bg-blue-600 text-white'
-									: 'border border-gray-200 bg-white text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white'
+									: message.role === 'tool'
+										? 'border border-purple-200 bg-purple-50 text-gray-900 dark:border-purple-800 dark:bg-purple-900/20 dark:text-white'
+										: 'border border-gray-200 bg-white text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white'
 							}`}
 						>
 							<div className="flex items-center space-x-2">
 								<p className="text-sm whitespace-pre-wrap">
-									{message.content}
-									{message.isStreaming && (
-										<span className="text-xs text-gray-500 dark:text-gray-400">
-											...
-										</span>
+									{message.role === 'tool' ? (
+										<>
+											<span className="font-medium text-purple-600 dark:text-purple-400">
+												Tool Result:
+											</span>{' '}
+											{typeof message.content === 'string'
+												? message.content
+												: JSON.stringify(message.content, null, 2)}
+										</>
+									) : (
+										message.content
 									)}
 								</p>
+								{message.isStreaming ? (
+									<span className="text-xs text-gray-500 dark:text-gray-400">
+										<span className="inline-flex space-x-1">
+											<span
+												className="animate-bounce"
+												style={{ animationDelay: '0ms' }}
+											>
+												•
+											</span>
+											<span
+												className="animate-bounce"
+												style={{ animationDelay: '150ms' }}
+											>
+												•
+											</span>
+											<span
+												className="animate-bounce"
+												style={{ animationDelay: '300ms' }}
+											>
+												•
+											</span>
+										</span>
+									</span>
+								) : null}
 							</div>
 							<p
 								className={`mt-1 text-xs ${
 									message.role === 'user'
 										? 'text-blue-200'
-										: 'text-gray-500 dark:text-gray-400'
+										: message.role === 'tool'
+											? 'text-purple-600 dark:text-purple-400'
+											: 'text-gray-500 dark:text-gray-400'
 								}`}
 							>
-								{new Date(message.timestamp).toLocaleTimeString([], {
-									hour: '2-digit',
-									minute: '2-digit',
-									hour12: true,
-								})}
+								{message.role === 'tool'
+									? 'Tool'
+									: new Date(message.timestamp).toLocaleTimeString([], {
+											hour: '2-digit',
+											minute: '2-digit',
+											hour12: true,
+										})}
 							</p>
 						</div>
 					</div>
@@ -154,6 +190,45 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 								</div>
 							</div>
 						))}
+					</div>
+				)}
+
+				{/* Tool Approval UI */}
+				{state.pendingToolCall && (
+					<div className="flex justify-center">
+						<div className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 dark:border-orange-800 dark:bg-orange-900/20">
+							<div className="mb-2">
+								<p className="text-sm font-medium text-orange-800 dark:text-orange-200">
+									Tool Call Pending Approval
+								</p>
+								<p className="text-xs text-orange-700 dark:text-orange-300">
+									Tool:{' '}
+									<span className="font-mono">
+										{state.pendingToolCall.name}
+									</span>
+								</p>
+								<p className="text-xs text-orange-700 dark:text-orange-300">
+									Arguments:{' '}
+									<span className="font-mono">
+										{JSON.stringify(state.pendingToolCall.arguments)}
+									</span>
+								</p>
+							</div>
+							<div className="flex space-x-2">
+								<button
+									onClick={() => actor.send({ type: 'APPROVE_TOOL_EXECUTION' })}
+									className="rounded bg-green-600 px-3 py-1 text-xs text-white transition-colors hover:bg-green-700 focus:ring-2 focus:ring-green-500"
+								>
+									Approve & Execute
+								</button>
+								<button
+									onClick={() => actor.send({ type: 'REJECT_TOOL_EXECUTION' })}
+									className="rounded bg-red-600 px-3 py-1 text-xs text-white transition-colors hover:bg-red-700 focus:ring-2 focus:ring-red-500"
+								>
+									Reject
+								</button>
+							</div>
+						</div>
 					</div>
 				)}
 

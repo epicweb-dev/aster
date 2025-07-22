@@ -1,231 +1,503 @@
-import type { ToolDefinition } from './search-engine'
+import { type ChatCompletionTool } from '@mlc-ai/web-llm'
 
-// Tool execution function type
-export type ToolExecutor = (args: Record<string, unknown>) => Promise<string>
+type ToolCallback = (args: Record<string, any>) => Promise<any>
 
-// Tool definition with execution logic
-export type Tool = {
-	definition: ToolDefinition
-	executor: ToolExecutor
+type ToolDefinition = {
+	config: ChatCompletionTool
+	callback: ToolCallback
 }
 
-// Tool registry
-export class ToolRegistry {
-	private tools = new Map<string, Tool>()
+const tools = new Map<string, ToolDefinition>()
 
-	// Register a tool with its definition and executor
-	register(
-		name: string,
-		definition: ToolDefinition,
-		executor: ToolExecutor,
-	): void {
-		this.tools.set(name, { definition, executor })
+export function defineTool(
+	name: string,
+	config: Omit<ChatCompletionTool, 'type'>,
+	callback: ToolCallback,
+): void {
+	tools.set(name, {
+		config: { type: 'function', ...config },
+		callback,
+	})
+}
+
+export async function invokeTool(
+	name: string,
+	args: Record<string, any>,
+): Promise<any> {
+	const tool = tools.get(name)
+	if (!tool) {
+		throw new Error(`Tool "${name}" not found`)
 	}
+	return await tool.callback(args)
+}
 
-	// Get a tool by name
-	get(name: string): Tool | undefined {
-		return this.tools.get(name)
-	}
+export async function getAvailableTools(): Promise<Array<ChatCompletionTool>> {
+	return Array.from(tools.values()).map((tool) => tool.config)
+}
 
-	// Get all tool definitions (for search engine)
-	getAllDefinitions(): ToolDefinition[] {
-		return Array.from(this.tools.values()).map((tool) => tool.definition)
-	}
+// Example usage - define the search tool
+defineTool(
+	'search',
+	{
+		function: {
+			name: 'search',
+			description: 'Search the web for information',
+			parameters: {
+				type: 'object',
+				properties: {
+					query: { type: 'string', description: 'The query to search for' },
+				},
+				required: ['query'],
+			},
+		},
+	},
+	async (args) => {
+		// This is where you'd implement the actual search logic
+		console.log('Searching for:', args.query)
+		return { results: [] }
+	},
+)
 
-	// Execute a tool
-	async execute(name: string, args: Record<string, unknown>): Promise<string> {
-		const tool = this.tools.get(name)
-		if (!tool) {
-			throw new Error(`Unknown tool: ${name}`)
+// Weather tool
+defineTool(
+	'weather',
+	{
+		function: {
+			name: 'weather',
+			description: 'Get current weather information for a location',
+			parameters: {
+				type: 'object',
+				properties: {
+					location: { type: 'string', description: 'City name or coordinates' },
+					units: {
+						type: 'string',
+						enum: ['celsius', 'fahrenheit'],
+						description: 'Temperature units',
+					},
+				},
+				required: ['location'],
+			},
+		},
+	},
+	async (args) => {
+		console.log(
+			'Getting weather for:',
+			args.location,
+			'in',
+			args.units || 'celsius',
+		)
+		return { temperature: 22, condition: 'partly cloudy', humidity: 65 }
+	},
+)
+
+// Calculator tool
+defineTool(
+	'calculate',
+	{
+		function: {
+			name: 'calculate',
+			description: 'Perform mathematical calculations',
+			parameters: {
+				type: 'object',
+				properties: {
+					expression: {
+						type: 'string',
+						description: 'Mathematical expression to evaluate',
+					},
+				},
+				required: ['expression'],
+			},
+		},
+	},
+	async (args) => {
+		console.log('Calculating:', args.expression)
+		try {
+			// Note: In production, use a safe math evaluation library
+			const result = eval(args.expression)
+			return { result, expression: args.expression }
+		} catch (error) {
+			return { error: 'Invalid expression' }
 		}
-		return await tool.executor(args)
-	}
+	},
+)
 
-	// Check if a tool exists
-	has(name: string): boolean {
-		return this.tools.has(name)
-	}
-}
-
-// Create the global tool registry
-export const toolRegistry = new ToolRegistry()
-
-// Tool implementations
-const tools = {
-	// Alert tool
-	alert: {
-		definition: {
-			name: 'alert',
-			description: 'Display an alert message to the user',
+// Translator tool
+defineTool(
+	'translate',
+	{
+		function: {
+			name: 'translate',
+			description: 'Translate text between languages',
 			parameters: {
 				type: 'object',
 				properties: {
-					message: {
+					text: { type: 'string', description: 'Text to translate' },
+					from: {
 						type: 'string',
-						description: 'The message to display in the alert',
+						description: 'Source language code (e.g., en, es, fr)',
 					},
+					to: { type: 'string', description: 'Target language code' },
 				},
-				required: ['message'],
+				required: ['text', 'to'],
 			},
 		},
-		executor: async (args: Record<string, unknown>): Promise<string> => {
-			const message = args.message as string
-			alert(message)
-			return `Alert displayed: ${message}`
-		},
 	},
+	async (args) => {
+		console.log(
+			'Translating:',
+			args.text,
+			'from',
+			args.from || 'auto',
+			'to',
+			args.to,
+		)
+		return {
+			translated: `[Translated: ${args.text}]`,
+			from: args.from || 'auto',
+			to: args.to,
+		}
+	},
+)
 
-	// File search tool
-	file_search: {
-		definition: {
-			name: 'file_search',
-			description: 'Search for files in the codebase using fuzzy matching',
+// Image generator tool
+defineTool(
+	'generate-image',
+	{
+		function: {
+			name: 'generate-image',
+			description: 'Generate an image from a text description',
 			parameters: {
 				type: 'object',
 				properties: {
+					prompt: {
+						type: 'string',
+						description: 'Text description of the image to generate',
+					},
+					style: {
+						type: 'string',
+						enum: ['realistic', 'artistic', 'cartoon'],
+						description: 'Image style',
+					},
+					size: {
+						type: 'string',
+						enum: ['small', 'medium', 'large'],
+						description: 'Image size',
+					},
+				},
+				required: ['prompt'],
+			},
+		},
+	},
+	async (args) => {
+		console.log(
+			'Generating image:',
+			args.prompt,
+			'style:',
+			args.style || 'realistic',
+		)
+		return {
+			image_url: 'https://example.com/generated-image.jpg',
+			prompt: args.prompt,
+			style: args.style || 'realistic',
+		}
+	},
+)
+
+// News tool
+defineTool(
+	'get-news',
+	{
+		function: {
+			name: 'get-news',
+			description: 'Get latest news articles by topic or category',
+			parameters: {
+				type: 'object',
+				properties: {
+					category: {
+						type: 'string',
+						enum: [
+							'technology',
+							'business',
+							'sports',
+							'entertainment',
+							'science',
+						],
+						description: 'News category',
+					},
 					query: {
 						type: 'string',
-						description: 'The search query to find files',
+						description: 'Search term for news articles',
 					},
-				},
-				required: ['query'],
-			},
-		},
-		executor: async (args: Record<string, unknown>): Promise<string> => {
-			const query = args.query as string
-			// TODO: Implement actual file search functionality
-			return `File search for "${query}" - This would execute the file_search tool`
-		},
-	},
-
-	// Codebase search tool
-	codebase_search: {
-		definition: {
-			name: 'codebase_search',
-			description: 'Search for code snippets and functions in the codebase',
-			parameters: {
-				type: 'object',
-				properties: {
-					query: {
-						type: 'string',
-						description: 'The search query for code',
-					},
-					target_directories: {
-						type: 'array',
-						items: { type: 'string' },
-						description: 'Optional directories to search in',
-					},
-				},
-				required: ['query'],
-			},
-		},
-		executor: async (args: Record<string, unknown>): Promise<string> => {
-			const query = args.query as string
-			const targetDirectories = args.target_directories as string[] | undefined
-			// TODO: Implement actual codebase search functionality
-			return `Codebase search for "${query}"${targetDirectories ? ` in ${targetDirectories.join(', ')}` : ''} - This would execute the codebase_search tool`
-		},
-	},
-
-	// Read file tool
-	read_file: {
-		definition: {
-			name: 'read_file',
-			description: 'Read the contents of a specific file',
-			parameters: {
-				type: 'object',
-				properties: {
-					target_file: {
-						type: 'string',
-						description: 'The path of the file to read',
-					},
-					start_line_one_indexed: {
+					limit: {
 						type: 'number',
-						description: 'Starting line number (optional)',
-					},
-					end_line_one_indexed_inclusive: {
-						type: 'number',
-						description: 'Ending line number (optional)',
+						description: 'Number of articles to return (max 10)',
 					},
 				},
-				required: ['target_file'],
+				required: [],
 			},
 		},
-		executor: async (args: Record<string, unknown>): Promise<string> => {
-			const targetFile = args.target_file as string
-			const startLine = args.start_line_one_indexed as number | undefined
-			const endLine = args.end_line_one_indexed_inclusive as number | undefined
-			// TODO: Implement actual file reading functionality
-			return `Reading file "${targetFile}"${startLine ? ` from line ${startLine}` : ''}${endLine ? ` to line ${endLine}` : ''} - This would execute the read_file tool`
-		},
 	},
+	async (args) => {
+		console.log(
+			'Getting news for:',
+			args.category || args.query,
+			'limit:',
+			args.limit || 5,
+		)
+		return {
+			articles: [
+				{ title: 'Sample News Article', url: 'https://example.com/news/1' },
+			],
+			count: 1,
+		}
+	},
+)
 
-	// Edit file tool
-	edit_file: {
-		definition: {
-			name: 'edit_file',
-			description: 'Create or edit a file with new content',
+// Calendar tool
+defineTool(
+	'calendar',
+	{
+		function: {
+			name: 'calendar',
+			description: 'Manage calendar events and appointments',
 			parameters: {
 				type: 'object',
 				properties: {
-					target_file: {
+					action: {
 						type: 'string',
-						description: 'The path of the file to create or edit',
+						enum: ['create', 'list', 'delete'],
+						description: 'Calendar action to perform',
 					},
-					instructions: {
-						type: 'string',
-						description: 'Instructions for the edit',
-					},
-					code_edit: {
-						type: 'string',
-						description: 'The new code content',
-					},
+					title: { type: 'string', description: 'Event title' },
+					date: { type: 'string', description: 'Event date (YYYY-MM-DD)' },
+					time: { type: 'string', description: 'Event time (HH:MM)' },
+					description: { type: 'string', description: 'Event description' },
 				},
-				required: ['target_file', 'instructions', 'code_edit'],
+				required: ['action'],
 			},
 		},
-		executor: async (args: Record<string, unknown>): Promise<string> => {
-			const targetFile = args.target_file as string
-			const instructions = args.instructions as string
-			const codeEdit = args.code_edit as string
-			// TODO: Implement actual file editing functionality
-			return `Editing file "${targetFile}" with instructions: "${instructions}" - This would execute the edit_file tool`
-		},
 	},
+	async (args) => {
+		console.log('Calendar action:', args.action, args.title || '')
+		if (args.action === 'create') {
+			return { event_id: 'evt_123', status: 'created' }
+		} else if (args.action === 'list') {
+			return { events: [{ title: 'Sample Event', date: '2024-01-15' }] }
+		}
+		return { status: 'success' }
+	},
+)
 
-	// Run terminal command tool
-	run_terminal_cmd: {
-		definition: {
-			name: 'run_terminal_cmd',
-			description: 'Execute a terminal command',
+// Email tool
+defineTool(
+	'send-email',
+	{
+		function: {
+			name: 'send-email',
+			description: 'Send an email message',
 			parameters: {
 				type: 'object',
 				properties: {
-					command: {
+					to: { type: 'string', description: 'Recipient email address' },
+					subject: { type: 'string', description: 'Email subject' },
+					body: { type: 'string', description: 'Email body content' },
+					priority: {
 						type: 'string',
-						description: 'The command to execute',
-					},
-					is_background: {
-						type: 'boolean',
-						description: 'Whether to run the command in the background',
+						enum: ['low', 'normal', 'high'],
+						description: 'Email priority',
 					},
 				},
-				required: ['command'],
+				required: ['to', 'subject', 'body'],
 			},
 		},
-		executor: async (args: Record<string, unknown>): Promise<string> => {
-			const command = args.command as string
-			const isBackground = args.is_background as boolean | undefined
-			// TODO: Implement actual terminal command execution
-			return `Running command "${command}"${isBackground ? ' in background' : ''} - This would execute the run_terminal_cmd tool`
+	},
+	async (args) => {
+		console.log('Sending email to:', args.to, 'subject:', args.subject)
+		return { message_id: 'msg_456', status: 'sent', recipient: args.to }
+	},
+)
+
+// File operations tool
+defineTool(
+	'file-operations',
+	{
+		function: {
+			name: 'file-operations',
+			description: 'Perform file system operations',
+			parameters: {
+				type: 'object',
+				properties: {
+					action: {
+						type: 'string',
+						enum: ['read', 'write', 'delete', 'list'],
+						description: 'File operation to perform',
+					},
+					path: { type: 'string', description: 'File path' },
+					content: {
+						type: 'string',
+						description: 'Content to write (for write action)',
+					},
+				},
+				required: ['action', 'path'],
+			},
 		},
 	},
+	async (args) => {
+		console.log('File operation:', args.action, 'on path:', args.path)
+		if (args.action === 'read') {
+			return { content: 'Sample file content', size: 1024 }
+		} else if (args.action === 'write') {
+			return { status: 'written', bytes: args.content?.length || 0 }
+		} else if (args.action === 'list') {
+			return {
+				files: ['file1.txt', 'file2.pdf'],
+				directories: ['docs', 'images'],
+			}
+		}
+		return { status: 'success' }
+	},
+)
+
+// Database query tool
+defineTool(
+	'database-query',
+	{
+		function: {
+			name: 'database-query',
+			description: 'Execute database queries',
+			parameters: {
+				type: 'object',
+				properties: {
+					query: { type: 'string', description: 'SQL query to execute' },
+					database: { type: 'string', description: 'Database name' },
+					operation: {
+						type: 'string',
+						enum: ['select', 'insert', 'update', 'delete'],
+						description: 'Query operation type',
+					},
+				},
+				required: ['query', 'database'],
+			},
+		},
+	},
+	async (args) => {
+		console.log('Database query:', args.operation, 'on', args.database)
+		return {
+			rows_affected: 1,
+			result: [{ id: 1, name: 'Sample Record' }],
+			execution_time: '0.05s',
+		}
+	},
+)
+
+// Code analysis tool
+defineTool(
+	'analyze-code',
+	{
+		function: {
+			name: 'analyze-code',
+			description: 'Analyze code for issues, complexity, and suggestions',
+			parameters: {
+				type: 'object',
+				properties: {
+					code: { type: 'string', description: 'Code to analyze' },
+					language: { type: 'string', description: 'Programming language' },
+					analysis_type: {
+						type: 'string',
+						enum: ['lint', 'complexity', 'security', 'performance'],
+						description: 'Type of analysis',
+					},
+				},
+				required: ['code', 'language'],
+			},
+		},
+	},
+	async (args) => {
+		console.log(
+			'Analyzing',
+			args.language,
+			'code for',
+			args.analysis_type || 'general issues',
+		)
+		return {
+			issues: [{ line: 5, message: 'Consider using const instead of let' }],
+			complexity_score: 3,
+			suggestions: ['Add error handling', 'Consider extracting function'],
+		}
+	},
+)
+
+// Social media tool
+defineTool(
+	'social-media',
+	{
+		function: {
+			name: 'social-media',
+			description: 'Post content to social media platforms',
+			parameters: {
+				type: 'object',
+				properties: {
+					platform: {
+						type: 'string',
+						enum: ['twitter', 'linkedin', 'facebook', 'instagram'],
+						description: 'Social media platform',
+					},
+					content: { type: 'string', description: 'Content to post' },
+					hashtags: { type: 'string', description: 'Comma-separated hashtags' },
+					schedule: {
+						type: 'string',
+						description: 'Schedule time (YYYY-MM-DD HH:MM)',
+					},
+				},
+				required: ['platform', 'content'],
+			},
+		},
+	},
+	async (args) => {
+		console.log('Posting to', args.platform, ':', args.content)
+		return {
+			post_id: 'post_789',
+			platform: args.platform,
+			status: 'posted',
+			url: `https://${args.platform}.com/post/post_789`,
+		}
+	},
+)
+
+// API testing tool
+defineTool(
+	'test-api',
+	{
+		function: {
+			name: 'test-api',
+			description: 'Test API endpoints and validate responses',
+			parameters: {
+				type: 'object',
+				properties: {
+					url: { type: 'string', description: 'API endpoint URL' },
+					method: {
+						type: 'string',
+						enum: ['GET', 'POST', 'PUT', 'DELETE'],
+						description: 'HTTP method',
+					},
+					headers: { type: 'string', description: 'JSON string of headers' },
+					body: { type: 'string', description: 'Request body (for POST/PUT)' },
+				},
+				required: ['url', 'method'],
+			},
+		},
+	},
+	async (args) => {
+		console.log('Testing API:', args.method, args.url)
+		return {
+			status_code: 200,
+			response_time: '150ms',
+			headers: { 'content-type': 'application/json' },
+			body: { message: 'Success' },
+		}
+	},
+)
+
+export async function getTool(name: string) {
+	return tools.get(name)?.config
 }
-
-// Register all tools
-Object.entries(tools).forEach(([name, tool]) => {
-	toolRegistry.register(name, tool.definition, tool.executor)
-})
-
-// Export the registry and types for use in other files
-export { toolRegistry as default }

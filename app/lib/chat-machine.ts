@@ -4,17 +4,21 @@ import type {
 	MLCEngineConfig,
 	ChatOptions,
 	MLCEngineInterface,
-	ChatCompletionMessageParam,
 	ChatCompletionChunk,
+	ChatCompletionRequestStreaming,
 } from '@mlc-ai/web-llm'
+import { search } from './search-engine'
+import { invokeTool } from './tools'
 
 // Types
 type Message = {
 	id: string
-	role: 'user' | 'assistant' | 'system'
+	role: 'user' | 'assistant' | 'system' | 'tool'
 	content: string
 	timestamp: Date
 	isStreaming?: boolean
+	toolCall?: { name: string; arguments: Record<string, any> } | null
+	toolResult?: any
 }
 
 type ChatContext = {
@@ -37,6 +41,10 @@ type ChatContext = {
 		completionTokens: number
 		totalTokens: number
 	} | null
+
+	// Tool State
+	pendingToolCall: { name: string; arguments: Record<string, any> } | null
+	toolResult: any | null
 
 	// Configuration
 	loggingEnabled: boolean
@@ -71,12 +79,17 @@ type ChatEvents =
 	  }
 	| { type: 'CHAT_ERROR'; error: string }
 	| { type: 'SET_LOGGING_ENABLED'; enabled: boolean }
-
-type ChatCompletionOptions = {
-	temperature?: number
-	maxTokens?: number
-	stream?: boolean
-}
+	| {
+			type: 'TOOL_CALL_RECEIVED'
+			toolCall: { name: string; arguments: Record<string, any> } | null
+	  }
+	| {
+			type: 'TOOL_RESULT_RECEIVED'
+			result: any
+			messageId: string
+	  }
+	| { type: 'APPROVE_TOOL_EXECUTION' }
+	| { type: 'REJECT_TOOL_EXECUTION' }
 
 // Actor implementations
 const createEngineActor = fromPromise(
@@ -101,6 +114,25 @@ const createEngineActor = fromPromise(
 	},
 )
 
+const toolInvocationActor = fromPromise(
+	async ({
+		input,
+	}: {
+		input: {
+			toolCall: { name: string; arguments: Record<string, any> }
+		}
+	}) => {
+		const { toolCall } = input
+		console.log(
+			'Invoking tool:',
+			toolCall.name,
+			'with arguments:',
+			toolCall.arguments,
+		)
+		return await invokeTool(toolCall.name, toolCall.arguments)
+	},
+)
+
 const chatCompletionActor = fromCallback(
 	({
 		sendBack,
@@ -109,54 +141,97 @@ const chatCompletionActor = fromCallback(
 		sendBack: any
 		input: {
 			engine: MLCEngineInterface
-			messages: Array<ChatCompletionMessageParam>
-			options: ChatCompletionOptions
+			options: ChatCompletionRequestStreaming
 		}
 	}) => {
-		const { engine, messages, options } = input
+		const { engine, options } = input
 
 		const performChat = async () => {
 			try {
-				if (options.stream) {
-					// Generate message ID for this streaming session
-					const messageId = crypto.randomUUID()
+				// Generate message ID for this streaming session
+				const messageId = crypto.randomUUID()
 
-					// Handle streaming
-					sendBack({ type: 'START_STREAMING', messageId })
-					const chunks = await engine.chat.completions.create({
-						messages,
-						...options,
-						stream: true,
-						stream_options: { include_usage: true },
-					})
+				// Handle streaming
+				sendBack({ type: 'START_STREAMING', messageId })
 
-					let fullContent = ''
-					for await (const chunk of chunks) {
-						const content = chunk.choices[0]?.delta.content || ''
-						fullContent += content
+				console.time('search')
+				const tools = await search(options.messages)
+				console.timeEnd('search')
 
-						sendBack({
-							type: 'STREAM_CHUNK',
-							chunk,
-							content,
-							messageId,
-							isComplete: false,
-						})
-					}
+				console.log('making completion request with the following tools', tools)
 
-					// Get final message
-					const finalMessage = await engine.getMessage()
+				const toolBoundaryId = crypto.randomUUID()
+
+				const chunks = await engine.chat.completions.create({
+					...options,
+					messages: [
+						{
+							role: 'system',
+							content: tools.length
+								? `
+You are a helpful assistant that can use tools to help the user. Below is a list of tools and a user message. Use the tools to help the user.
+
+${tools.map((tool) => tool.llmDescription).join('\n')}
+
+You can respond to the user and then call a tool. To call a tool, you must use the following format:
+
+[TOOL_CALL:${toolBoundaryId}]
+{"name": "tool_name", "arguments": {}}
+[/TOOL_CALL:${toolBoundaryId}]
+
+You can also provide arguments to a tool:
+
+[TOOL_CALL:${toolBoundaryId}]
+{"name": "tool_name","arguments": {"argument_name": "argument_value"}}
+[/TOOL_CALL:${toolBoundaryId}]
+
+Here's a real example of a tool call:
+
+[TOOL_CALL:${toolBoundaryId}]
+{"name": "send_greeting","arguments": {"greeting": "Hello, world!"}}
+[/TOOL_CALL:${toolBoundaryId}]
+									`.trim()
+								: 'You are a helpful AI assistant. Be concise and friendly in your responses.',
+						},
+						...options.messages,
+					],
+					stream: true,
+					stream_options: { include_usage: true },
+				})
+				console.log('starting to process chunks', chunks)
+
+				let fullContent = ''
+				for await (const chunk of chunks) {
+					console.log(chunk)
+					const content = chunk.choices[0]?.delta.content || ''
+					fullContent += content
 
 					sendBack({
-						type: 'CHAT_COMPLETION_RECEIVED',
-						content: finalMessage,
-						isComplete: true,
+						type: 'STREAM_CHUNK',
+						chunk,
+						content,
 						messageId,
-						usage: null, // Usage is included in the last chunk
+						isComplete: false,
 					})
-				} else {
-					throw new Error('non-streaming is not supported')
 				}
+
+				// Get final message
+				const finalMessage = await engine.getMessage()
+
+				const toolCall = parseToolCall(finalMessage)
+
+				sendBack({
+					type: 'TOOL_CALL_RECEIVED',
+					toolCall: toolCall,
+				})
+
+				sendBack({
+					type: 'CHAT_COMPLETION_RECEIVED',
+					content: finalMessage,
+					isComplete: true,
+					messageId,
+					usage: null, // Usage is included in the last chunk
+				})
 			} catch (error) {
 				sendBack({
 					type: 'CHAT_ERROR',
@@ -174,6 +249,35 @@ const chatCompletionActor = fromCallback(
 	},
 )
 
+// Helper function to parse tool calls from the final message
+function parseToolCall(
+	message: string,
+): { name: string; arguments: Record<string, any> } | null {
+	// Look for tool call pattern: [TOOL_CALL:boundaryId]...[/TOOL_CALL:boundaryId]
+	const toolCallRegex = /\[TOOL_CALL:[^\]]+\](.*?)\[\/TOOL_CALL:[^\]]+\]/s
+
+	const match = message.match(toolCallRegex)
+	if (!match) {
+		return null
+	}
+
+	try {
+		const toolCallContent = match[1].trim()
+		const toolCall = JSON.parse(toolCallContent)
+
+		if (toolCall.name && typeof toolCall.name === 'string') {
+			return {
+				name: toolCall.name,
+				arguments: toolCall.arguments || {},
+			}
+		}
+	} catch (error) {
+		console.error('Failed to parse tool call:', error)
+	}
+
+	return null
+}
+
 // Create the merged state machine
 export const chatMachine = setup({
 	types: {
@@ -183,6 +287,7 @@ export const chatMachine = setup({
 	actors: {
 		createEngine: createEngineActor,
 		chatCompletion: chatCompletionActor,
+		toolInvocation: toolInvocationActor,
 	},
 	actions: {
 		logTransition: ({ event, context }) => {
@@ -335,6 +440,65 @@ export const chatMachine = setup({
 				return event.enabled
 			},
 		}),
+		assignPendingToolCall: assign({
+			pendingToolCall: ({ event }) => {
+				invariant(
+					event.type === 'TOOL_CALL_RECEIVED',
+					'assignPendingToolCall should only be called with TOOL_CALL_RECEIVED events',
+				)
+				return event.toolCall
+			},
+		}),
+		clearToolState: assign({
+			pendingToolCall: null,
+			toolResult: null,
+		}),
+		assignToolResult: assign({
+			toolResult: ({ event }) => (event as any).output,
+			isLoading: false,
+		}),
+		assignToolError: assign({
+			error: ({ event }) =>
+				(event as any).error?.message || 'Tool execution failed',
+			isLoading: false,
+		}),
+		addToolMessage: assign({
+			messages: ({ context, event }) => {
+				invariant(
+					event.type === 'TOOL_RESULT_RECEIVED',
+					'addToolMessage should only be called with TOOL_RESULT_RECEIVED events',
+				)
+				const toolMessage: Message = {
+					id: crypto.randomUUID(),
+					role: 'tool',
+					content: JSON.stringify(event.result),
+					timestamp: new Date(),
+					toolCall: context.pendingToolCall,
+					toolResult: event.result,
+				}
+				return [...context.messages, toolMessage]
+			},
+			pendingToolCall: null,
+		}),
+		handleToolCompletion: assign({
+			messages: ({ context, event }) => {
+				const toolMessage: Message = {
+					id: crypto.randomUUID(),
+					role: 'tool',
+					content: JSON.stringify((event as any).output),
+					timestamp: new Date(),
+					toolCall: context.pendingToolCall,
+					toolResult: (event as any).output,
+				}
+				return [...context.messages, toolMessage]
+			},
+			toolResult: ({ event }) => (event as any).output,
+			pendingToolCall: null,
+		}),
+		continueAfterTool: assign({
+			isLoading: true,
+			isStreaming: true,
+		}),
 	},
 	guards: {
 		isModelLoaded: ({ context }) =>
@@ -361,11 +525,16 @@ export const chatMachine = setup({
 		modelLoadingProgress: 0,
 		usage: null,
 
+		// Tool State
+		pendingToolCall: null,
+		toolResult: null,
+
 		// Configuration
 		loggingEnabled: true,
 	},
 	states: {
 		idle: {
+			id: 'idle',
 			on: {
 				LOAD_MODEL: {
 					target: 'loadingModel',
@@ -396,6 +565,16 @@ export const chatMachine = setup({
 				},
 				SET_LOGGING_ENABLED: {
 					actions: ['setLoggingEnabled'],
+				},
+				TOOL_CALL_RECEIVED: {
+					actions: ({ event }) => {
+						console.log('Tool call received:', event.toolCall)
+					},
+				},
+				TOOL_RESULT_RECEIVED: {
+					actions: ({ event }) => {
+						console.log('Tool result received:', event.result)
+					},
 				},
 			},
 		},
@@ -453,21 +632,33 @@ export const chatMachine = setup({
 				SET_LOGGING_ENABLED: {
 					actions: ['setLoggingEnabled'],
 				},
+				TOOL_CALL_RECEIVED: {
+					actions: ({ event }) => {
+						console.log('Tool call received:', event.toolCall)
+					},
+				},
+				TOOL_RESULT_RECEIVED: {
+					actions: ({ event }) => {
+						console.log('Tool result received:', event.result)
+					},
+				},
 			},
 		},
 		streaming: {
+			id: 'streaming',
 			invoke: {
 				src: 'chatCompletion',
 				input: ({ context }) => ({
 					engine: context.engine!,
-					messages: context.messages.map((msg) => ({
-						role: msg.role,
-						content: msg.content,
-					})),
 					options: {
 						temperature: 0.7,
-						maxTokens: 1000,
 						stream: true,
+						messages: context.messages
+							.filter((msg) => msg.role !== 'tool') // Filter out tool messages for now
+							.map((msg) => ({
+								role: msg.role as 'system' | 'user' | 'assistant',
+								content: msg.content,
+							})),
 					},
 				}),
 				onDone: {
@@ -518,6 +709,21 @@ export const chatMachine = setup({
 				SET_LOGGING_ENABLED: {
 					actions: ['setLoggingEnabled'],
 				},
+				TOOL_CALL_RECEIVED: [
+					{
+						guard: ({ event }) => event.toolCall !== null,
+						target: 'toolCall',
+						actions: ['assignPendingToolCall'],
+					},
+					{
+						actions: ({ event }) => {
+							console.log('No tool call found in response')
+						},
+					},
+				],
+				TOOL_RESULT_RECEIVED: {
+					actions: ['addToolMessage'],
+				},
 
 				CHAT_COMPLETION_RECEIVED: [
 					{
@@ -553,7 +759,63 @@ export const chatMachine = setup({
 				target: 'streaming',
 			},
 		},
+		toolCall: {
+			initial: 'waitingForApproval',
+			entry: assign({
+				isLoading: false,
+				error: null,
+			}),
+			on: {
+				REJECT_TOOL_EXECUTION: {
+					target: 'idle',
+					actions: ['clearToolState'],
+				},
+			},
+			states: {
+				waitingForApproval: {
+					on: {
+						APPROVE_TOOL_EXECUTION: {
+							target: 'executing',
+							actions: assign({
+								isLoading: true,
+							}),
+						},
+						SET_INPUT: {
+							actions: ['assignInput'],
+						},
+						SET_LOGGING_ENABLED: {
+							actions: ['setLoggingEnabled'],
+						},
+					},
+				},
+				executing: {
+					invoke: {
+						src: 'toolInvocation',
+						input: ({ context }) => ({
+							toolCall: context.pendingToolCall!,
+						}),
+						onDone: {
+							target: '#streaming',
+							actions: ['handleToolCompletion'],
+						},
+						onError: {
+							target: '#error',
+							actions: ['assignToolError'],
+						},
+					},
+					on: {
+						SET_INPUT: {
+							actions: ['assignInput'],
+						},
+						SET_LOGGING_ENABLED: {
+							actions: ['setLoggingEnabled'],
+						},
+					},
+				},
+			},
+		},
 		error: {
+			id: 'error',
 			on: {
 				SET_INPUT: {
 					actions: ['assignInput'],
@@ -582,10 +844,20 @@ export const chatMachine = setup({
 				SET_LOGGING_ENABLED: {
 					actions: ['setLoggingEnabled'],
 				},
+				TOOL_CALL_RECEIVED: {
+					actions: ({ event }) => {
+						console.log('Tool call received:', event.toolCall)
+					},
+				},
+				TOOL_RESULT_RECEIVED: {
+					actions: ({ event }) => {
+						console.log('Tool result received:', event.result)
+					},
+				},
 			},
 		},
 	},
 })
 
 // Export types for external use
-export type { ChatContext, ChatEvents, Message, ChatCompletionOptions }
+export type { ChatContext, ChatEvents, Message }
