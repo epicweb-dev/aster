@@ -14,6 +14,7 @@
     "typegen": "wrangler types && react-router typegen"
   },
   "dependencies": {
+    "@epic-web/invariant": "^1.0.0",
     "@mlc-ai/web-llm": "^0.2.79",
     "@xstate/react": "^6.0.0",
     "isbot": "^5.1.27",

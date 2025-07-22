@@ -1,10 +1,9 @@
 import { setup, assign, fromPromise, fromCallback } from 'xstate'
+import { invariant } from '@epic-web/invariant'
 import type {
 	MLCEngineConfig,
 	ChatOptions,
 	MLCEngineInterface,
-	ChatCompletionMessage,
-	ChatCompletionChunk,
 	ChatCompletionMessageParam,
 } from '@mlc-ai/web-llm'
 
@@ -14,6 +13,7 @@ type Message = {
 	role: 'user' | 'assistant' | 'system'
 	content: string
 	timestamp: Date
+	isStreaming?: boolean
 }
 
 type ChatContext = {
@@ -24,13 +24,14 @@ type ChatContext = {
 	isStreaming: boolean
 	streamedContent: string
 	error: string | null
+	currentStreamingMessageId: string | null
+	messageQueue: string[]
 
 	// LLM State
 	engine: MLCEngineInterface | null
 	modelId: string | null
 	isModelLoaded: boolean
 	modelLoadingProgress: number
-	currentChatId: string | null
 	usage: {
 		promptTokens: number
 		completionTokens: number
@@ -49,10 +50,11 @@ type ChatEvents =
 			chatOpts?: ChatOptions
 	  }
 	| { type: 'MODEL_LOADING_PROGRESS'; progress: { progress: number } }
-	| { type: 'STREAM_UPDATE'; content: string }
 	| { type: 'RECEIVE_MESSAGE'; content: string }
 	| { type: 'ERROR'; error: string }
 	| { type: 'STREAM_CHUNK'; content: string; chunk: any }
+	| { type: 'UPDATE_MESSAGE'; messageId: string; content: string }
+	| { type: 'CREATE_ASSISTANT_MESSAGE'; messageId: string }
 	| {
 			type: 'CHAT_COMPLETION_RECEIVED'
 			content: string
@@ -142,18 +144,7 @@ const chatCompletionActor = fromCallback(
 						usage: null, // Usage is included in the last chunk
 					})
 				} else {
-					// Handle non-streaming
-					const reply = (await engine.chat.completions.create({
-						messages,
-						...options,
-					})) as any
-
-					sendBack({
-						type: 'CHAT_COMPLETION_RECEIVED',
-						content: reply.choices[0].message.content || '',
-						isComplete: true,
-						usage: reply.usage,
-					})
+					throw new Error('non-streaming is not supported')
 				}
 			} catch (error) {
 				sendBack({
@@ -184,8 +175,8 @@ export const chatMachine = setup({
 	},
 	actions: {
 		logTransition: ({ event, context }) => {
-			console.log(`[ChatMachine] Transition:`, {
-				event: event.type,
+			console.log(`[ChatMachine] Transition:`, event.type, {
+				event,
 				context: {
 					messagesCount: context.messages.length,
 					isLoading: context.isLoading,
@@ -213,9 +204,32 @@ export const chatMachine = setup({
 			isStreaming: false,
 			streamedContent: '',
 			error: null,
+			currentStreamingMessageId: null,
+			messageQueue: [],
 			modelLoadingProgress: 0,
-			currentChatId: null,
 			usage: null,
+		}),
+		queueMessage: assign({
+			messageQueue: ({ context }) => [
+				...context.messageQueue,
+				context.inputValue,
+			],
+			inputValue: '',
+			error: null,
+		}),
+		processQueue: assign({
+			messages: ({ context }) => [
+				...context.messages,
+				...context.messageQueue.map((content) => ({
+					id: crypto.randomUUID(),
+					role: 'user' as const,
+					content,
+					timestamp: new Date(),
+				})),
+			],
+			messageQueue: [],
+			error: null,
+			streamedContent: '',
 		}),
 		assignEngine: assign({
 			engine: ({ event }) => (event as any).output,
@@ -241,12 +255,9 @@ export const chatMachine = setup({
 			isStreaming: true,
 			isLoading: false,
 			error: null,
+			currentStreamingMessageId: () => crypto.randomUUID(),
 		}),
-		assignStreamUpdate: assign({
-			streamedContent: ({ event }) =>
-				event.type === 'STREAM_UPDATE' ? event.content : '',
-			isStreaming: true,
-		}),
+
 		assignReceiveMessage: assign({
 			messages: ({ context, event }) => {
 				if (event.type !== 'RECEIVE_MESSAGE') return context.messages
@@ -255,7 +266,7 @@ export const chatMachine = setup({
 					{
 						id: crypto.randomUUID(),
 						role: 'assistant',
-						content: event.content,
+						content: context.streamedContent,
 						timestamp: new Date(),
 					} as Message,
 				]
@@ -278,15 +289,45 @@ export const chatMachine = setup({
 			inputValue: '',
 			isLoading: true,
 			error: null,
-			currentChatId: () => crypto.randomUUID(),
+			streamedContent: '',
 		}),
+		createAssistantMessage: assign({
+			messages: ({ context }) => {
+				return [
+					...context.messages,
+					{
+						id: context.currentStreamingMessageId!,
+						role: 'assistant',
+						content: '',
+						timestamp: new Date(),
+						isStreaming: true,
+					} as Message,
+				]
+			},
+		}),
+		updateMessage: assign({
+			messages: ({ context, event }) => {
+				if (event.type !== 'UPDATE_MESSAGE') return context.messages
+				return context.messages.map((msg) =>
+					msg.id === event.messageId ? { ...msg, content: event.content } : msg,
+				)
+			},
+		}),
+
 		assignStreamChunk: assign({
 			streamedContent: ({ context, event }) =>
 				context.streamedContent + (event as any).content,
 			isStreaming: true,
 		}),
 		assignChatCompletion: assign({
-			streamedContent: ({ event }) => (event as any).content,
+			streamedContent: ({ event }) => {
+				invariant(
+					event.type === 'CHAT_COMPLETION_RECEIVED',
+					'Invalid event. This should only be invoked with CHAT_COMPLETION_RECEIVED events',
+				)
+
+				return event.content
+			},
 			isStreaming: false,
 			usage: ({ event }) => (event as any).usage || null,
 		}),
@@ -295,13 +336,30 @@ export const chatMachine = setup({
 			isStreaming: false,
 			isLoading: false,
 		}),
+		completeCurrentMessage: assign({
+			messages: ({ context }) => {
+				return context.messages.map((msg) =>
+					msg.id === context.currentStreamingMessageId
+						? { ...msg, isStreaming: false }
+						: msg,
+				)
+			},
+			currentStreamingMessageId: null,
+			isStreaming: false,
+			isLoading: false,
+		}),
+		startNextChatCompletion: assign({
+			isStreaming: true,
+			isLoading: false,
+			error: null,
+			currentStreamingMessageId: () => crypto.randomUUID(),
+		}),
 		reset: assign({
 			engine: null,
 			modelId: null,
 			isModelLoaded: false,
 			modelLoadingProgress: 0,
 			error: null,
-			currentChatId: null,
 			usage: null,
 		}),
 	},
@@ -322,50 +380,17 @@ export const chatMachine = setup({
 		isStreaming: false,
 		streamedContent: '',
 		error: null,
+		currentStreamingMessageId: null,
+		messageQueue: [],
 
 		// LLM State
 		engine: null,
 		modelId: null,
 		isModelLoaded: false,
 		modelLoadingProgress: 0,
-		currentChatId: null,
 		usage: null,
 	},
 	states: {
-		loadingModel: {
-			entry: assign({
-				modelLoadingProgress: 0,
-				error: null,
-			}),
-			invoke: {
-				src: 'createEngine',
-				input: ({ event }) => ({
-					modelId: (event as any).modelId,
-					engineConfig: (event as any).engineConfig,
-					chatOpts: (event as any).chatOpts,
-				}),
-				onDone: {
-					target: 'idle',
-					actions: ['logTransition', 'assignEngine'],
-				},
-				onError: {
-					target: 'error',
-					actions: assign({
-						error: ({ event }) =>
-							(event as any).error?.message || 'Failed to load model',
-					}),
-				},
-			},
-			on: {
-				MODEL_LOADING_PROGRESS: {
-					actions: 'assignModelLoadingProgress',
-				},
-				ERROR: {
-					target: 'error',
-					actions: ['logTransition', 'assignError'],
-				},
-			},
-		},
 		idle: {
 			on: {
 				LOAD_MODEL: {
@@ -389,13 +414,68 @@ export const chatMachine = setup({
 					},
 					{
 						guard: 'hasInput',
-						actions: assign({
-							error: 'Model not loaded. Please load a model first.',
-						}),
+						actions: ['logTransition', 'queueMessage'],
 					},
 				],
 				CLEAR_CHAT: {
 					actions: ['clearChat'],
+				},
+			},
+		},
+		loadingModel: {
+			entry: assign({
+				modelLoadingProgress: 0,
+				error: null,
+			}),
+			invoke: {
+				src: 'createEngine',
+				input: ({ event }) => {
+					invariant(
+						event.type === 'LOAD_MODEL',
+						'Invalid event. createEngine should only be invoked with LOAD_MODEL events',
+					)
+
+					return {
+						modelId: event.modelId,
+						engineConfig: event.engineConfig,
+						chatOpts: event.chatOpts,
+					}
+				},
+				onDone: [
+					{
+						guard: ({ context }) => context.messageQueue.length > 0,
+						target: 'streaming',
+						actions: ['logTransition', 'assignEngine', 'processQueue'],
+					},
+					{
+						target: 'idle',
+						actions: ['logTransition', 'assignEngine'],
+					},
+				],
+				onError: {
+					target: 'error',
+					actions: assign({
+						error: ({ event }) =>
+							(event as any).error?.message || 'Failed to load model',
+					}),
+				},
+			},
+			on: {
+				SET_INPUT: {
+					actions: ['assignInput'],
+				},
+				SEND_MESSAGE: [
+					{
+						guard: 'hasInput',
+						actions: ['logTransition', 'queueMessage'],
+					},
+				],
+				MODEL_LOADING_PROGRESS: {
+					actions: 'assignModelLoadingProgress',
+				},
+				ERROR: {
+					target: 'error',
+					actions: ['logTransition', 'assignError'],
 				},
 			},
 		},
@@ -424,9 +504,15 @@ export const chatMachine = setup({
 				},
 			},
 			on: {
-				STREAM_UPDATE: {
-					actions: ['assignStreamUpdate'],
+				SET_INPUT: {
+					actions: ['assignInput'],
 				},
+				SEND_MESSAGE: [
+					{
+						guard: 'hasInput',
+						actions: ['logTransition', 'queueMessage'],
+					},
+				],
 				RECEIVE_MESSAGE: {
 					target: 'idle',
 					actions: ['logTransition', 'assignReceiveMessage'],
@@ -436,28 +522,99 @@ export const chatMachine = setup({
 					actions: ['logTransition', 'assignError'],
 				},
 				STREAM_CHUNK: {
-					actions: ({ event, self }) => {
-						console.log(`[ChatMachine] Received STREAM_CHUNK:`, event.content)
-						self.send({ type: 'STREAM_UPDATE', content: event.content })
-					},
-				},
-				CHAT_COMPLETION_RECEIVED: {
-					target: 'idle',
-					actions: ({ event, self }) => {
-						console.log(
-							`[ChatMachine] Received CHAT_COMPLETION_RECEIVED:`,
-							event.content,
+					actions: ({ context, event, self }) => {
+						invariant(
+							event.type === 'STREAM_CHUNK',
+							'Invalid event. chatCompletion should only be invoked with STREAM_CHUNK events',
 						)
-						self.send({ type: 'RECEIVE_MESSAGE', content: event.content })
+
+						// Create assistant message on first chunk if it doesn't exist
+						if (
+							!context.messages.some(
+								(msg) => msg.id === context.currentStreamingMessageId,
+							)
+						) {
+							self.send({
+								type: 'CREATE_ASSISTANT_MESSAGE',
+								messageId: context.currentStreamingMessageId!,
+							})
+						}
+
+						// Update the streaming message with the full appended content
+						if (context.currentStreamingMessageId) {
+							const currentMessage = context.messages.find(
+								(msg) => msg.id === context.currentStreamingMessageId,
+							)
+							const currentContent = currentMessage?.content || ''
+							const fullContent = currentContent + event.content
+
+							self.send({
+								type: 'UPDATE_MESSAGE',
+								messageId: context.currentStreamingMessageId,
+								content: fullContent,
+							})
+						}
 					},
 				},
-				CHAT_ERROR: {
-					target: 'error',
-					actions: ({ event, self }) => {
-						console.log(`[ChatMachine] Received CHAT_ERROR:`, event.error)
-						self.send({ type: 'ERROR', error: event.error })
-					},
+				UPDATE_MESSAGE: {
+					actions: ['logTransition', 'updateMessage'],
 				},
+				CREATE_ASSISTANT_MESSAGE: {
+					actions: ['logTransition', 'createAssistantMessage'],
+				},
+
+				CHAT_COMPLETION_RECEIVED: [
+					{
+						guard: ({ context }) => context.messageQueue.length > 0,
+						target: 'processingQueue',
+						actions: [
+							'logTransition',
+							'completeCurrentMessage',
+							'processQueue',
+						],
+					},
+					{
+						target: 'idle',
+						actions: [
+							'logTransition',
+							'completeCurrentMessage',
+							({ context }) => {
+								console.log(
+									`[ChatMachine] Received CHAT_COMPLETION_RECEIVED:`,
+									context.streamedContent,
+								)
+							},
+						],
+					},
+				],
+				CHAT_ERROR: [
+					{
+						guard: ({ context }) => context.messageQueue.length > 0,
+						target: 'processingQueue',
+						actions: [
+							'logTransition',
+							'completeCurrentMessage',
+							'processQueue',
+						],
+					},
+					{
+						target: 'error',
+						actions: [
+							'logTransition',
+							'completeCurrentMessage',
+							({ event, self }) => {
+								console.log(`[ChatMachine] Received CHAT_ERROR:`, event.error)
+								self.send({ type: 'ERROR', error: event.error })
+							},
+						],
+					},
+				],
+			},
+		},
+		processingQueue: {
+			entry: ['startNextChatCompletion'],
+			always: {
+				target: 'streaming',
 			},
 		},
 		error: {
@@ -474,7 +631,14 @@ export const chatMachine = setup({
 					actions: [
 						'logTransition',
 						assign({
-							modelId: ({ event }) => (event as any).modelId,
+							modelId: ({ event }) => {
+								invariant(
+									event.type === 'LOAD_MODEL',
+									'Invalid event. This should only be invoked with LOAD_MODEL events',
+								)
+
+								return event.modelId
+							},
 							error: null,
 						}),
 					],
