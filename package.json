@@ -11,14 +11,16 @@
     "postinstall": "npm run typegen",
     "preview": "npm run build && vite preview",
     "typecheck": "npm run typegen && tsc -b",
-		"typegen": "wrangler types && react-router typegen"
+    "typegen": "wrangler types && react-router typegen"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.79",
+    "@xstate/react": "^6.0.0",
     "isbot": "^5.1.27",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-router": "^7.7.0"
+    "react-router": "^7.7.0",
+    "xstate": "^5.20.1"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.0.12",

@@ -136,6 +136,7 @@ Response:`
 				temperature: this.#config.temperature,
 				max_tokens: 1000,
 			})
+			console.log('[SearchEngine]: response', response)
 
 			const content = response.choices[0]?.message?.content
 			if (!content) {
