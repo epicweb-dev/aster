@@ -214,13 +214,6 @@ Here's a real example of a tool call:
 				// Get final message
 				const finalMessage = await engine.getMessage()
 
-				const toolCall = parseToolCall(finalMessage, toolBoundaryId)
-
-				sendBack({
-					type: 'TOOL_CALL_RECEIVED',
-					toolCall: toolCall,
-				})
-
 				sendBack({
 					type: 'CHAT_COMPLETION_RECEIVED',
 					content: finalMessage,
@@ -228,6 +221,15 @@ Here's a real example of a tool call:
 					messageId,
 					usage: null, // Usage is included in the last chunk
 				})
+
+				const toolCall = parseToolCall(finalMessage, toolBoundaryId)
+
+				if (toolCall) {
+					sendBack({
+						type: 'TOOL_CALL_RECEIVED',
+						toolCall: toolCall,
+					})
+				}
 			} catch (error) {
 				sendBack({
 					type: 'CHAT_ERROR',
@@ -566,15 +568,20 @@ export const chatMachine = setup({
 				SET_LOGGING_ENABLED: {
 					actions: ['setLoggingEnabled'],
 				},
-				TOOL_CALL_RECEIVED: {
-					actions: ({ event }) => {
-						console.log('Tool call received:', event.toolCall)
+				TOOL_CALL_RECEIVED: [
+					{
+						guard: ({ event }) => event.toolCall !== null,
+						target: 'toolCall',
+						actions: ['assignPendingToolCall'],
 					},
-				},
+					{
+						actions: ({ event }) => {
+							console.log('No tool call found in response')
+						},
+					},
+				],
 				TOOL_RESULT_RECEIVED: {
-					actions: ({ event }) => {
-						console.log('Tool result received:', event.result)
-					},
+					actions: ['logTransition', 'addToolMessage'],
 				},
 			},
 		},
@@ -632,15 +639,20 @@ export const chatMachine = setup({
 				SET_LOGGING_ENABLED: {
 					actions: ['setLoggingEnabled'],
 				},
-				TOOL_CALL_RECEIVED: {
-					actions: ({ event }) => {
-						console.log('Tool call received:', event.toolCall)
+				TOOL_CALL_RECEIVED: [
+					{
+						guard: ({ event }) => event.toolCall !== null,
+						target: 'toolCall',
+						actions: ['assignPendingToolCall'],
 					},
-				},
+					{
+						actions: ({ event }) => {
+							console.log('No tool call found in response')
+						},
+					},
+				],
 				TOOL_RESULT_RECEIVED: {
-					actions: ({ event }) => {
-						console.log('Tool result received:', event.result)
-					},
+					actions: ['logTransition', 'addToolMessage'],
 				},
 			},
 		},
@@ -674,6 +686,7 @@ export const chatMachine = setup({
 				SEND_MESSAGE: [
 					{
 						guard: 'hasInput',
+						target: 'interrupting',
 						actions: ['logTransition', 'queueMessage'],
 					},
 				],
@@ -707,22 +720,9 @@ export const chatMachine = setup({
 				SET_LOGGING_ENABLED: {
 					actions: ['setLoggingEnabled'],
 				},
-				TOOL_CALL_RECEIVED: [
-					{
-						guard: ({ event }) => event.toolCall !== null,
-						target: 'toolCall',
-						actions: ['assignPendingToolCall'],
-					},
-					{
-						actions: ({ event }) => {
-							console.log('No tool call found in response')
-						},
-					},
-				],
 				TOOL_RESULT_RECEIVED: {
-					actions: ['addToolMessage'],
+					actions: ['logTransition', 'addToolMessage'],
 				},
-
 				CHAT_COMPLETION_RECEIVED: [
 					{
 						guard: ({ context }) => context.messageQueue.length > 0,
@@ -751,7 +751,19 @@ export const chatMachine = setup({
 				],
 			},
 		},
+		interrupting: {
+			id: 'interrupting',
+			entry: assign({
+				isStreaming: false,
+				isLoading: false,
+			}),
+			always: {
+				target: 'streaming',
+				actions: ['startNextChatCompletion'],
+			},
+		},
 		processingQueue: {
+			id: 'processingQueue',
 			entry: ['startNextChatCompletion'],
 			always: {
 				target: 'streaming',
@@ -768,6 +780,19 @@ export const chatMachine = setup({
 					target: 'idle',
 					actions: ['clearToolState'],
 				},
+				SEND_MESSAGE: [
+					{
+						guard: 'hasInput',
+						target: 'streaming',
+						actions: ['logTransition', 'clearToolState', 'assignUserMessage'],
+					},
+				],
+				SET_INPUT: {
+					actions: ['assignInput'],
+				},
+				SET_LOGGING_ENABLED: {
+					actions: ['setLoggingEnabled'],
+				},
 			},
 			states: {
 				waitingForApproval: {
@@ -778,6 +803,17 @@ export const chatMachine = setup({
 								isLoading: true,
 							}),
 						},
+						SEND_MESSAGE: [
+							{
+								guard: 'hasInput',
+								target: '#streaming',
+								actions: [
+									'logTransition',
+									'clearToolState',
+									'assignUserMessage',
+								],
+							},
+						],
 						SET_INPUT: {
 							actions: ['assignInput'],
 						},
@@ -792,16 +828,34 @@ export const chatMachine = setup({
 						input: ({ context }) => ({
 							toolCall: context.pendingToolCall!,
 						}),
-						onDone: {
-							target: '#streaming',
-							actions: ['handleToolCompletion'],
-						},
+						onDone: [
+							{
+								guard: ({ context }) => context.messageQueue.length > 0,
+								target: '#processingQueue',
+								actions: ['handleToolCompletion'],
+							},
+							{
+								target: '#streaming',
+								actions: ['handleToolCompletion', 'startNextChatCompletion'],
+							},
+						],
 						onError: {
 							target: '#error',
 							actions: ['assignToolError'],
 						},
 					},
 					on: {
+						SEND_MESSAGE: [
+							{
+								guard: 'hasInput',
+								target: '#streaming',
+								actions: [
+									'logTransition',
+									'clearToolState',
+									'assignUserMessage',
+								],
+							},
+						],
 						SET_INPUT: {
 							actions: ['assignInput'],
 						},
@@ -842,15 +896,20 @@ export const chatMachine = setup({
 				SET_LOGGING_ENABLED: {
 					actions: ['setLoggingEnabled'],
 				},
-				TOOL_CALL_RECEIVED: {
-					actions: ({ event }) => {
-						console.log('Tool call received:', event.toolCall)
+				TOOL_CALL_RECEIVED: [
+					{
+						guard: ({ event }) => event.toolCall !== null,
+						target: 'toolCall',
+						actions: ['assignPendingToolCall'],
 					},
-				},
+					{
+						actions: ({ event }) => {
+							console.log('No tool call found in response')
+						},
+					},
+				],
 				TOOL_RESULT_RECEIVED: {
-					actions: ({ event }) => {
-						console.log('Tool result received:', event.result)
-					},
+					actions: ['logTransition', 'addToolMessage'],
 				},
 			},
 		},
