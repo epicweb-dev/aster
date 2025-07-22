@@ -28,6 +28,109 @@ interface ModelInfo {
 	lowResource: boolean
 }
 
+// Tool calling interfaces
+interface ToolCall {
+	id: string
+	name: string
+	arguments: Record<string, any>
+}
+
+interface ToolResult {
+	id: string
+	result?: any
+	error?: string
+}
+
+// Available tools
+const availableTools = {
+	alert: {
+		name: 'alert',
+		description: 'Display an alert message to the user',
+		parameters: {
+			type: 'object',
+			properties: {
+				message: {
+					type: 'string',
+					description: 'The message to display in the alert'
+				}
+			},
+			required: ['message']
+		}
+	}
+}
+
+// Tool execution function
+const executeTool = async (toolCall: ToolCall): Promise<ToolResult> => {
+	try {
+		// Check if the tool exists
+		const tool = availableTools[toolCall.name as keyof typeof availableTools]
+		if (!tool) {
+			return {
+				id: toolCall.id,
+				error: `Unknown tool: ${toolCall.name}`
+			}
+		}
+
+		// Validate required parameters
+		const requiredParams = tool.parameters.required || []
+		for (const param of requiredParams) {
+			if (!(param in toolCall.arguments)) {
+				return {
+					id: toolCall.id,
+					error: `Missing required parameter: ${param}`
+				}
+			}
+		}
+
+		// Execute the tool
+		switch (toolCall.name) {
+			case 'alert':
+				alert(toolCall.arguments.message)
+				return {
+					id: toolCall.id,
+					result: `Alert: ${toolCall.arguments.message}`
+				}
+			default:
+				return {
+					id: toolCall.id,
+					error: `Tool execution not implemented: ${toolCall.name}`
+				}
+		}
+	} catch (error) {
+		return {
+			id: toolCall.id,
+			error: error instanceof Error ? error.message : 'Unknown error'
+		}
+	}
+}
+
+// Parse tool calls from response text
+const parseToolCalls = (text: string, expectedId: string): { toolCalls: ToolCall[], cleanText: string } => {
+	const toolCallRegex = new RegExp(`\\[TOOL_CALL:${expectedId}\\](.*?)\\[\\/TOOL_CALL:${expectedId}\\]`, 'gs')
+	const toolCalls: ToolCall[] = []
+	let cleanText = text
+
+	let match
+	while ((match = toolCallRegex.exec(text)) !== null) {
+		const payload = match[1]
+		try {
+			const parsedPayload = JSON.parse(payload)
+			toolCalls.push({
+				id: expectedId,
+				name: parsedPayload.name,
+				arguments: parsedPayload.arguments || {}
+			})
+		} catch (error) {
+			console.error('Failed to parse tool call payload:', error)
+		}
+	}
+
+	// Remove tool call markers from the text
+	cleanText = text.replace(toolCallRegex, '').trim()
+
+	return { toolCalls, cleanText }
+}
+
 // Helper function to categorize models
 const categorizeModel = (modelId: string, vramRequired: number, lowResource: boolean): string => {
 	if (modelId.includes('Llama-3.1') || modelId.includes('Llama-3.2')) return 'Llama 3.x'
@@ -250,11 +353,24 @@ export default function Chat() {
 
 		try {
 			// Prepare messages for the LLM
+			const id = crypto.randomUUID()
+			// Generate tool descriptions from availableTools
+			const toolDescriptions = Object.values(availableTools)
+				.map((tool) => `- ${tool.name}: ${tool.description}`)
+				.join('\n')
+
 			const llmMessages = [
 				{
 					role: 'system',
-					content:
-						'You are a helpful AI assistant. Be concise and friendly in your responses.',
+					content: `You are a helpful AI assistant. Be concise and friendly in your responses.
+
+You have access to the following tools:
+${toolDescriptions}
+
+To use a tool, format your response like this:
+[TOOL_CALL:${id}]{ "name": "alert", "arguments": { "message": "Hello World" } }[/TOOL_CALL:${id}]
+
+Only use tools when explicitly requested or when it would be helpful for the user.`,
 				},
 				...messages.map((msg) => ({
 					role: msg.sender === 'user' ? 'user' : 'assistant',
@@ -292,6 +408,31 @@ export default function Chat() {
 					prev.map((msg) =>
 						msg.id === assistantMessageId
 							? { ...msg, text: fullResponse }
+							: msg,
+					),
+				)
+			}
+
+			// Process tool calls after the full response is received
+			const { toolCalls, cleanText } = parseToolCalls(fullResponse, id)
+			
+			if (toolCalls.length > 0) {
+				// Execute all tool calls
+				const toolResults = await Promise.all(
+					toolCalls.map(toolCall => executeTool(toolCall))
+				)
+
+				// Update the message with clean text and tool results
+				const toolResultsText = toolResults
+					.map(result => result.error ? `Error: ${result.error}` : result.result)
+					.join('\n')
+
+				const finalText = cleanText + (toolResultsText ? `\n\nTool Results:\n${toolResultsText}` : '')
+				
+				setMessages((prev) =>
+					prev.map((msg) =>
+						msg.id === assistantMessageId
+							? { ...msg, text: finalText }
 							: msg,
 					),
 				)
