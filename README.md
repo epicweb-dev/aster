@@ -1,79 +1,104 @@
-# Welcome to React Router!
+# Aster - React Router Chat App with WebLLM
 
-A modern, production-ready template for building full-stack React applications using React Router.
+A modern chat application built with React Router and powered by WebLLM for
+client-side AI inference.
 
 ## Features
 
-- 🚀 Server-side rendering
-- ⚡️ Hot Module Replacement (HMR)
-- 📦 Asset bundling and optimization
-- 🔄 Data loading and mutations
-- 🔒 TypeScript by default
-- 🎉 TailwindCSS for styling
-- 📖 [React Router docs](https://reactrouter.com/)
+- 🤖 **Real AI Chat**: Powered by WebLLM with local model inference
+- 🚀 **Streaming Responses**: Real-time streaming of AI responses
+- 📱 **Modern UI**: Clean, responsive interface with dark mode support
+- 🔄 **Dynamic Model Selection**: Choose from 100+ available models organized by category
+- 💾 **Local Processing**: All AI processing happens in your browser
+- ⚡ **Fast Loading**: Optimized model loading with progress tracking
+
+## Available Models
+
+The app dynamically loads all available models from WebLLM, including:
+
+### Llama Models
+- **Llama 3.1**: 8B and 70B parameter models
+- **Llama 3.2**: 1B and 3B parameter models  
+- **Llama 3**: 8B and 70B parameter models
+- **Llama 2**: 7B and 13B parameter models
+
+### Qwen Models
+- **Qwen 3**: 0.6B, 1.7B, 4B, and 8B parameter models
+- **Qwen 2.5**: 0.5B, 1.5B, 3B, and 7B parameter models (including Math and Coder variants)
+- **Qwen 2**: 0.5B, 1.5B, and 7B parameter models
+
+### Other Popular Models
+- **Phi**: 1.5, 2, 3 Mini, and 3.5 Mini models (including vision capabilities)
+- **Gemma**: 2B and 9B parameter models
+- **Mistral**: 7B parameter models
+- **Hermes**: Various instruction-tuned models
+- **DeepSeek**: R1 models
+- **SmolLM**: Lightweight models (135M, 360M, 1.7B parameters)
+- **TinyLlama**: 1.1B parameter models
+- **StableLM**: Zephyr models
+- **WizardMath**: Math-focused models
+
+### Model Categories
+Models are organized into categories and include information about:
+- **VRAM Requirements**: Memory needed to run the model
+- **Resource Level**: Whether the model is optimized for low-resource devices
+- **Specialization**: Math, coding, vision, or general-purpose models
 
 ## Getting Started
 
-### Installation
+1. **Install dependencies**:
+   ```bash
+   npm install
+   ```
 
-Install the dependencies:
+2. **Start the development server**:
+   ```bash
+   npm run dev
+   ```
 
-```bash
-npm install
-```
+3. **Open your browser** and navigate to the chat page
 
-### Development
+## How It Works
 
-Start the development server with HMR:
+The app uses [WebLLM](https://github.com/mlc-ai/web-llm) to run large language
+models directly in your browser. This means:
 
-```bash
-npm run dev
-```
+- No server costs or API keys required
+- Complete privacy - your conversations stay on your device
+- Works offline after initial model download
+- Real-time streaming responses
+- Access to 100+ pre-trained models
 
-Your application will be available at `http://localhost:5173`.
+## Model Selection
 
-## Previewing the Production Build
+The app automatically loads all available models from WebLLM and organizes them by category. You can:
 
-Preview the production build locally:
+- **Browse by Category**: Models are grouped by family (Llama, Qwen, Phi, etc.)
+- **Filter by Size**: Choose from small models (135M parameters) to large models (70B parameters)
+- **Select by Specialization**: Pick models optimized for math, coding, vision, or general chat
+- **Consider Resources**: Models are marked as low-resource or standard based on VRAM requirements
 
-```bash
-npm run preview
-```
+## First Load
 
-## Building for Production
+On first load, the app will download and initialize the selected model. This may
+take a few minutes depending on your internet connection. The model will be
+cached for faster subsequent loads.
 
-Create a production build:
+## Development
 
-```bash
-npm run build
-```
+- Built with React Router v7
+- TypeScript for type safety
+- Tailwind CSS for styling
+- WebLLM for AI inference
 
 ## Deployment
 
-Deployment is done using the Wrangler CLI.
+This app is configured for Cloudflare Pages deployment:
 
-To build and deploy directly to production:
-
-```sh
+```bash
 npm run deploy
 ```
 
-To deploy a preview URL:
+## License
 
-```sh
-npx wrangler versions upload
-```
-
-You can then promote a version to production after verification or roll it out progressively.
-
-```sh
-npx wrangler versions deploy
-```
-
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
-
----
-
-Built with ❤️ using React Router.
+MIT
