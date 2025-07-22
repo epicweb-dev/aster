@@ -154,11 +154,7 @@ const chatCompletionActor = fromCallback(
 				// Handle streaming
 				sendBack({ type: 'START_STREAMING', messageId })
 
-				console.time('search')
 				const tools = await search(options.messages)
-				console.timeEnd('search')
-
-				console.log('making completion request with the following tools', tools)
 
 				const toolBoundaryId = crypto.randomUUID()
 
@@ -218,7 +214,7 @@ Here's a real example of a tool call:
 				// Get final message
 				const finalMessage = await engine.getMessage()
 
-				const toolCall = parseToolCall(finalMessage)
+				const toolCall = parseToolCall(finalMessage, toolBoundaryId)
 
 				sendBack({
 					type: 'TOOL_CALL_RECEIVED',
@@ -252,9 +248,13 @@ Here's a real example of a tool call:
 // Helper function to parse tool calls from the final message
 function parseToolCall(
 	message: string,
+	toolBoundaryId: string,
 ): { name: string; arguments: Record<string, any> } | null {
 	// Look for tool call pattern: [TOOL_CALL:boundaryId]...[/TOOL_CALL:boundaryId]
-	const toolCallRegex = /\[TOOL_CALL:[^\]]+\](.*?)\[\/TOOL_CALL:[^\]]+\]/s
+	const toolCallRegex = new RegExp(
+		`\\[TOOL_CALL:${toolBoundaryId}\\](.*?)\\[\\/TOOL_CALL:${toolBoundaryId}\\]`,
+		's',
+	)
 
 	const match = message.match(toolCallRegex)
 	if (!match) {
@@ -653,13 +653,11 @@ export const chatMachine = setup({
 					options: {
 						temperature: 0.7,
 						stream: true,
-						messages: context.messages
-							.filter((msg) => msg.role !== 'tool') // Filter out tool messages for now
-							.map((msg) => ({
-								role: msg.role as 'system' | 'user' | 'assistant',
-								content: msg.content,
-							})),
-					},
+						messages: context.messages.map((msg) => ({
+							role: msg.role,
+							content: msg.content,
+						})),
+					} as ChatCompletionRequestStreaming,
 				}),
 				onDone: {
 					target: 'idle',

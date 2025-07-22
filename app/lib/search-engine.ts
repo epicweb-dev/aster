@@ -56,11 +56,13 @@ export async function search(messages: Array<ChatCompletionMessageParam>) {
 		// Create the search prompt
 		const searchPrompt = `You are a tool recommendation engine. Given a conversation context, evaluate which tools are most relevant for the current user request.
 
-Available tools:
+<available_tools>
 ${toolsDescription}
+</available_tools>
 
-Conversation context:
+<conversation_context>
 ${conversationContext}
+</conversation_context>
 
 For each relevant tool, provide:
 1. Tool name
