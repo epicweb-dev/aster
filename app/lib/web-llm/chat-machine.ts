@@ -37,6 +37,9 @@ type ChatContext = {
 		completionTokens: number
 		totalTokens: number
 	} | null
+
+	// Configuration
+	loggingEnabled: boolean
 }
 
 type ChatEvents =
@@ -67,6 +70,7 @@ type ChatEvents =
 			usage?: any
 	  }
 	| { type: 'CHAT_ERROR'; error: string }
+	| { type: 'SET_LOGGING_ENABLED'; enabled: boolean }
 
 type ChatCompletionOptions = {
 	temperature?: number
@@ -182,17 +186,19 @@ export const chatMachine = setup({
 	},
 	actions: {
 		logTransition: ({ event, context }) => {
-			console.log(`[ChatMachine] Transition:`, event.type, {
-				event,
-				context: {
-					messagesCount: context.messages.length,
-					isLoading: context.isLoading,
-					isStreaming: context.isStreaming,
-					isModelLoaded: context.isModelLoaded,
-					modelLoadingProgress: context.modelLoadingProgress,
-					error: context.error,
-				},
-			})
+			if (context.loggingEnabled) {
+				console.log(`[ChatMachine] Transition:`, event.type, {
+					event,
+					context: {
+						messagesCount: context.messages.length,
+						isLoading: context.isLoading,
+						isStreaming: context.isStreaming,
+						isModelLoaded: context.isModelLoaded,
+						modelLoadingProgress: context.modelLoadingProgress,
+						error: context.error,
+					},
+				})
+			}
 		},
 		assignInput: assign({
 			inputValue: ({ event }) =>
@@ -249,11 +255,6 @@ export const chatMachine = setup({
 					event.type === 'MODEL_LOADING_PROGRESS'
 						? Math.round(event.progress.progress * 100)
 						: 0
-				console.log(
-					`[ChatMachine] Updated model loading progress:`,
-					progress,
-					'%',
-				)
 				return progress
 			},
 		}),
@@ -325,6 +326,15 @@ export const chatMachine = setup({
 			isLoading: false,
 			error: null,
 		}),
+		setLoggingEnabled: assign({
+			loggingEnabled: ({ event }) => {
+				invariant(
+					event.type === 'SET_LOGGING_ENABLED',
+					'setLoggingEnabled should only be called with SET_LOGGING_ENABLED events',
+				)
+				return event.enabled
+			},
+		}),
 	},
 	guards: {
 		isModelLoaded: ({ context }) =>
@@ -350,6 +360,9 @@ export const chatMachine = setup({
 		isModelLoaded: false,
 		modelLoadingProgress: 0,
 		usage: null,
+
+		// Configuration
+		loggingEnabled: true,
 	},
 	states: {
 		idle: {
@@ -380,6 +393,9 @@ export const chatMachine = setup({
 				],
 				CLEAR_CHAT: {
 					actions: ['clearChat'],
+				},
+				SET_LOGGING_ENABLED: {
+					actions: ['setLoggingEnabled'],
 				},
 			},
 		},
@@ -433,6 +449,9 @@ export const chatMachine = setup({
 				],
 				MODEL_LOADING_PROGRESS: {
 					actions: 'assignModelLoadingProgress',
+				},
+				SET_LOGGING_ENABLED: {
+					actions: ['setLoggingEnabled'],
 				},
 			},
 		},
@@ -496,6 +515,9 @@ export const chatMachine = setup({
 				UPDATE_MESSAGE: {
 					actions: ['logTransition', 'updateMessage'],
 				},
+				SET_LOGGING_ENABLED: {
+					actions: ['setLoggingEnabled'],
+				},
 
 				CHAT_COMPLETION_RECEIVED: [
 					{
@@ -509,16 +531,7 @@ export const chatMachine = setup({
 					},
 					{
 						target: 'idle',
-						actions: [
-							'logTransition',
-							'completeCurrentMessage',
-							({ context }) => {
-								console.log(
-									`[ChatMachine] Received CHAT_COMPLETION_RECEIVED:`,
-									context.streamedContent,
-								)
-							},
-						],
+						actions: ['logTransition', 'completeCurrentMessage'],
 					},
 				],
 				CHAT_ERROR: [
@@ -529,13 +542,7 @@ export const chatMachine = setup({
 					},
 					{
 						target: 'error',
-						actions: [
-							'logTransition',
-							({ event, self }) => {
-								console.log(`[ChatMachine] Received CHAT_ERROR:`, event.error)
-								// Error is already handled by assignChatError action
-							},
-						],
+						actions: ['logTransition'],
 					},
 				],
 			},
@@ -571,6 +578,9 @@ export const chatMachine = setup({
 							error: null,
 						}),
 					],
+				},
+				SET_LOGGING_ENABLED: {
+					actions: ['setLoggingEnabled'],
 				},
 			},
 		},
