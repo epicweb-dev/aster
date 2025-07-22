@@ -25,6 +25,17 @@ export function Welcome({ message }: { message: string }) {
 							What&apos;s next?
 						</p>
 						<ul>
+							{appRoutes.map(({ href, text, icon }) => (
+								<li key={href}>
+									<a
+										className="group flex items-center gap-3 self-stretch p-3 leading-normal text-blue-700 hover:underline dark:text-blue-500"
+										href={href}
+									>
+										{icon}
+										{text}
+									</a>
+								</li>
+							))}
 							{resources.map(({ href, text, icon }) => (
 								<li key={href}>
 									<a
@@ -46,6 +57,47 @@ export function Welcome({ message }: { message: string }) {
 		</main>
 	)
 }
+
+const appRoutes = [
+	{
+		href: '/chat',
+		text: 'Chat with AI',
+		icon: (
+			<svg
+				xmlns="http://www.w3.org/2000/svg"
+				width="24"
+				height="20"
+				viewBox="0 0 24 20"
+				fill="none"
+				className="stroke-gray-600 group-hover:stroke-current dark:stroke-gray-300"
+			>
+				<path
+					d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+					strokeWidth="1.5"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				/>
+			</svg>
+		),
+	},
+	{
+		href: '/search',
+		text: 'Tool Search',
+		icon: (
+			<svg
+				xmlns="http://www.w3.org/2000/svg"
+				width="24"
+				height="20"
+				viewBox="0 0 24 20"
+				fill="none"
+				className="stroke-gray-600 group-hover:stroke-current dark:stroke-gray-300"
+			>
+				<circle cx="11" cy="11" r="8" strokeWidth="1.5" />
+				<path d="m21 21-4.35-4.35" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+			</svg>
+		),
+	},
+]
 
 const resources = [
 	{
