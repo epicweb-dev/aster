@@ -5,6 +5,7 @@ import type {
 	ChatOptions,
 	MLCEngineInterface,
 	ChatCompletionMessageParam,
+	ChatCompletionChunk,
 } from '@mlc-ai/web-llm'
 
 // Types
@@ -24,7 +25,6 @@ type ChatContext = {
 	isStreaming: boolean
 	streamedContent: string
 	error: string | null
-	currentStreamingMessageId: string | null
 	messageQueue: string[]
 
 	// LLM State
@@ -50,15 +50,20 @@ type ChatEvents =
 			chatOpts?: ChatOptions
 	  }
 	| { type: 'MODEL_LOADING_PROGRESS'; progress: { progress: number } }
-	| { type: 'RECEIVE_MESSAGE'; content: string }
-	| { type: 'ERROR'; error: string }
-	| { type: 'STREAM_CHUNK'; content: string; chunk: any }
+	| { type: 'START_STREAMING'; messageId: string }
+	| {
+			type: 'STREAM_CHUNK'
+			content: string
+			chunk: ChatCompletionChunk
+			messageId: string
+	  }
 	| { type: 'UPDATE_MESSAGE'; messageId: string; content: string }
 	| { type: 'CREATE_ASSISTANT_MESSAGE'; messageId: string }
 	| {
 			type: 'CHAT_COMPLETION_RECEIVED'
 			content: string
 			isComplete: boolean
+			messageId: string
 			usage?: any
 	  }
 	| { type: 'CHAT_ERROR'; error: string }
@@ -67,10 +72,6 @@ type ChatCompletionOptions = {
 	temperature?: number
 	maxTokens?: number
 	stream?: boolean
-	seed?: number
-	jsonMode?: boolean
-	tools?: any[]
-	toolChoice?: any
 }
 
 // Actor implementations
@@ -113,7 +114,11 @@ const chatCompletionActor = fromCallback(
 		const performChat = async () => {
 			try {
 				if (options.stream) {
+					// Generate message ID for this streaming session
+					const messageId = crypto.randomUUID()
+
 					// Handle streaming
+					sendBack({ type: 'START_STREAMING', messageId })
 					const chunks = await engine.chat.completions.create({
 						messages,
 						...options,
@@ -130,6 +135,7 @@ const chatCompletionActor = fromCallback(
 							type: 'STREAM_CHUNK',
 							chunk,
 							content,
+							messageId,
 							isComplete: false,
 						})
 					}
@@ -141,6 +147,7 @@ const chatCompletionActor = fromCallback(
 						type: 'CHAT_COMPLETION_RECEIVED',
 						content: finalMessage,
 						isComplete: true,
+						messageId,
 						usage: null, // Usage is included in the last chunk
 					})
 				} else {
@@ -192,7 +199,7 @@ export const chatMachine = setup({
 				event.type === 'SET_INPUT' ? event.value : '',
 		}),
 		assignError: assign({
-			error: ({ event }) => (event.type === 'ERROR' ? event.error : null),
+			error: ({ event }) => (event as any).error || null,
 			isLoading: false,
 			isStreaming: false,
 			modelLoadingProgress: 0,
@@ -204,7 +211,6 @@ export const chatMachine = setup({
 			isStreaming: false,
 			streamedContent: '',
 			error: null,
-			currentStreamingMessageId: null,
 			messageQueue: [],
 			modelLoadingProgress: 0,
 			usage: null,
@@ -251,31 +257,6 @@ export const chatMachine = setup({
 				return progress
 			},
 		}),
-		assignStreaming: assign({
-			isStreaming: true,
-			isLoading: false,
-			error: null,
-			currentStreamingMessageId: () => crypto.randomUUID(),
-		}),
-
-		assignReceiveMessage: assign({
-			messages: ({ context, event }) => {
-				if (event.type !== 'RECEIVE_MESSAGE') return context.messages
-				return [
-					...context.messages,
-					{
-						id: crypto.randomUUID(),
-						role: 'assistant',
-						content: context.streamedContent,
-						timestamp: new Date(),
-					} as Message,
-				]
-			},
-			streamedContent: '',
-			isStreaming: false,
-			isLoading: false,
-			usage: ({ event }) => (event as any).usage || null,
-		}),
 		assignUserMessage: assign({
 			messages: ({ context }) => [
 				...context.messages,
@@ -292,11 +273,15 @@ export const chatMachine = setup({
 			streamedContent: '',
 		}),
 		createAssistantMessage: assign({
-			messages: ({ context }) => {
+			messages: ({ context, event }) => {
+				invariant(
+					event.type === 'START_STREAMING',
+					'createAssistantMessage should only be called with START_STREAMING events',
+				)
 				return [
 					...context.messages,
 					{
-						id: context.currentStreamingMessageId!,
+						id: event.messageId,
 						role: 'assistant',
 						content: '',
 						timestamp: new Date(),
@@ -304,6 +289,9 @@ export const chatMachine = setup({
 					} as Message,
 				]
 			},
+			isStreaming: true,
+			isLoading: false,
+			error: null,
 		}),
 		updateMessage: assign({
 			messages: ({ context, event }) => {
@@ -314,37 +302,21 @@ export const chatMachine = setup({
 			},
 		}),
 
-		assignStreamChunk: assign({
-			streamedContent: ({ context, event }) =>
-				context.streamedContent + (event as any).content,
-			isStreaming: true,
-		}),
-		assignChatCompletion: assign({
-			streamedContent: ({ event }) => {
-				invariant(
-					event.type === 'CHAT_COMPLETION_RECEIVED',
-					'Invalid event. This should only be invoked with CHAT_COMPLETION_RECEIVED events',
-				)
-
-				return event.content
-			},
-			isStreaming: false,
-			usage: ({ event }) => (event as any).usage || null,
-		}),
 		assignChatError: assign({
 			error: ({ event }) => (event as any).error,
 			isStreaming: false,
 			isLoading: false,
 		}),
 		completeCurrentMessage: assign({
-			messages: ({ context }) => {
+			messages: ({ context, event }) => {
+				invariant(
+					event.type === 'CHAT_COMPLETION_RECEIVED',
+					'completeCurrentMessage should only be called with CHAT_COMPLETION_RECEIVED events',
+				)
 				return context.messages.map((msg) =>
-					msg.id === context.currentStreamingMessageId
-						? { ...msg, isStreaming: false }
-						: msg,
+					msg.id === event.messageId ? { ...msg, isStreaming: false } : msg,
 				)
 			},
-			currentStreamingMessageId: null,
 			isStreaming: false,
 			isLoading: false,
 		}),
@@ -352,21 +324,11 @@ export const chatMachine = setup({
 			isStreaming: true,
 			isLoading: false,
 			error: null,
-			currentStreamingMessageId: () => crypto.randomUUID(),
-		}),
-		reset: assign({
-			engine: null,
-			modelId: null,
-			isModelLoaded: false,
-			modelLoadingProgress: 0,
-			error: null,
-			usage: null,
 		}),
 	},
 	guards: {
 		isModelLoaded: ({ context }) =>
 			context.isModelLoaded && context.engine !== null,
-		isNotStreaming: ({ context }) => !context.isStreaming,
 		hasInput: ({ context }) => context.inputValue.trim().length > 0,
 	},
 }).createMachine({
@@ -380,7 +342,6 @@ export const chatMachine = setup({
 		isStreaming: false,
 		streamedContent: '',
 		error: null,
-		currentStreamingMessageId: null,
 		messageQueue: [],
 
 		// LLM State
@@ -473,14 +434,9 @@ export const chatMachine = setup({
 				MODEL_LOADING_PROGRESS: {
 					actions: 'assignModelLoadingProgress',
 				},
-				ERROR: {
-					target: 'error',
-					actions: ['logTransition', 'assignError'],
-				},
 			},
 		},
 		streaming: {
-			entry: ['assignStreaming'],
 			invoke: {
 				src: 'chatCompletion',
 				input: ({ context }) => ({
@@ -513,13 +469,8 @@ export const chatMachine = setup({
 						actions: ['logTransition', 'queueMessage'],
 					},
 				],
-				RECEIVE_MESSAGE: {
-					target: 'idle',
-					actions: ['logTransition', 'assignReceiveMessage'],
-				},
-				ERROR: {
-					target: 'error',
-					actions: ['logTransition', 'assignError'],
+				START_STREAMING: {
+					actions: ['logTransition', 'createAssistantMessage'],
 				},
 				STREAM_CHUNK: {
 					actions: ({ context, event, self }) => {
@@ -528,39 +479,22 @@ export const chatMachine = setup({
 							'Invalid event. chatCompletion should only be invoked with STREAM_CHUNK events',
 						)
 
-						// Create assistant message on first chunk if it doesn't exist
-						if (
-							!context.messages.some(
-								(msg) => msg.id === context.currentStreamingMessageId,
-							)
-						) {
-							self.send({
-								type: 'CREATE_ASSISTANT_MESSAGE',
-								messageId: context.currentStreamingMessageId!,
-							})
-						}
-
 						// Update the streaming message with the full appended content
-						if (context.currentStreamingMessageId) {
-							const currentMessage = context.messages.find(
-								(msg) => msg.id === context.currentStreamingMessageId,
-							)
-							const currentContent = currentMessage?.content || ''
-							const fullContent = currentContent + event.content
+						const currentMessage = context.messages.find(
+							(msg) => msg.id === event.messageId,
+						)
+						const currentContent = currentMessage?.content || ''
+						const fullContent = currentContent + event.content
 
-							self.send({
-								type: 'UPDATE_MESSAGE',
-								messageId: context.currentStreamingMessageId,
-								content: fullContent,
-							})
-						}
+						self.send({
+							type: 'UPDATE_MESSAGE',
+							messageId: event.messageId,
+							content: fullContent,
+						})
 					},
 				},
 				UPDATE_MESSAGE: {
 					actions: ['logTransition', 'updateMessage'],
-				},
-				CREATE_ASSISTANT_MESSAGE: {
-					actions: ['logTransition', 'createAssistantMessage'],
 				},
 
 				CHAT_COMPLETION_RECEIVED: [
@@ -591,20 +525,15 @@ export const chatMachine = setup({
 					{
 						guard: ({ context }) => context.messageQueue.length > 0,
 						target: 'processingQueue',
-						actions: [
-							'logTransition',
-							'completeCurrentMessage',
-							'processQueue',
-						],
+						actions: ['logTransition', 'processQueue'],
 					},
 					{
 						target: 'error',
 						actions: [
 							'logTransition',
-							'completeCurrentMessage',
 							({ event, self }) => {
 								console.log(`[ChatMachine] Received CHAT_ERROR:`, event.error)
-								self.send({ type: 'ERROR', error: event.error })
+								// Error is already handled by assignChatError action
 							},
 						],
 					},
