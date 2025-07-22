@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import type { Route } from './+types/chat'
-import { CreateMLCEngine, prebuiltAppConfig } from '@mlc-ai/web-llm'
+import { CreateMLCEngine, prebuiltAppConfig, type MLCEngine, type InitProgressCallback, type ChatCompletionMessageParam } from '@mlc-ai/web-llm'
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
 	return [
 		{ title: 'Chat - React Router App' },
 		{
@@ -12,14 +12,14 @@ export function meta({}: Route.MetaArgs) {
 	]
 }
 
-interface Message {
+type Message = {
 	id: string
 	text: string
 	sender: 'user' | 'assistant'
 	timestamp: Date
 }
 
-interface ModelInfo {
+type ModelInfo = {
 	id: string
 	name: string
 	description: string
@@ -28,16 +28,16 @@ interface ModelInfo {
 	lowResource: boolean
 }
 
-// Tool calling interfaces
-interface ToolCall {
+// Tool calling types
+type ToolCall = {
 	id: string
 	name: string
-	arguments: Record<string, any>
+	arguments: Record<string, unknown>
 }
 
-interface ToolResult {
+type ToolResult = {
 	id: string
-	result?: any
+	result?: string
 	error?: string
 }
 
@@ -60,7 +60,7 @@ const availableTools = {
 }
 
 // Tool execution function
-const executeTool = async (toolCall: ToolCall): Promise<ToolResult> => {
+async function executeTool(toolCall: ToolCall): Promise<ToolResult> {
 	try {
 		// Check if the tool exists
 		const tool = availableTools[toolCall.name as keyof typeof availableTools]
@@ -105,7 +105,7 @@ const executeTool = async (toolCall: ToolCall): Promise<ToolResult> => {
 }
 
 // Parse tool calls from response text
-const parseToolCalls = (text: string, expectedId: string): { toolCalls: ToolCall[], cleanText: string } => {
+function parseToolCalls(text: string, expectedId: string) {
 	const toolCallRegex = new RegExp(`\\[TOOL_CALL:${expectedId}\\](.*?)\\[\\/TOOL_CALL:${expectedId}\\]`, 'gs')
 	const toolCalls: ToolCall[] = []
 	let cleanText = text
@@ -132,7 +132,7 @@ const parseToolCalls = (text: string, expectedId: string): { toolCalls: ToolCall
 }
 
 // Helper function to categorize models
-const categorizeModel = (modelId: string, vramRequired: number, lowResource: boolean): string => {
+function categorizeModel(modelId: string) {
 	if (modelId.includes('Llama-3.1') || modelId.includes('Llama-3.2')) return 'Llama 3.x'
 	if (modelId.includes('Llama-3')) return 'Llama 3'
 	if (modelId.includes('Llama-2')) return 'Llama 2'
@@ -152,7 +152,7 @@ const categorizeModel = (modelId: string, vramRequired: number, lowResource: boo
 }
 
 // Helper function to generate model name
-const generateModelName = (modelId: string): string => {
+function generateModelName(modelId: string) {
 	// Remove MLC suffix and quantization info for display
 	let name = modelId.replace('-MLC', '').replace('-MLC-1k', '')
 	
@@ -202,7 +202,7 @@ const generateModelName = (modelId: string): string => {
 }
 
 // Helper function to generate model description
-const generateModelDescription = (modelId: string, vramRequired: number, lowResource: boolean): string => {
+function generateModelDescription(modelId: string, vramRequired: number, lowResource: boolean) {
 	const size = vramRequired < 1000 ? `${Math.round(vramRequired)}MB` : `${(vramRequired / 1000).toFixed(1)}GB`
 	const resource = lowResource ? 'Low-resource' : 'Standard'
 	
@@ -231,7 +231,7 @@ export default function Chat() {
 	const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
 	const [selectedModel, setSelectedModel] = useState<string>('')
 	const [error, setError] = useState<string | null>(null)
-	const [engine, setEngine] = useState<any>(null)
+	const [engine, setEngine] = useState<MLCEngine | null>(null)
 	const messagesEndRef = useRef<HTMLDivElement>(null)
 
 	// Auto-scroll to bottom when new messages arrive
@@ -241,7 +241,7 @@ export default function Chat() {
 
 	// Initialize available models from WebLLM
 	useEffect(() => {
-		const initializeModels = () => {
+		function initializeModels() {
 			const models: ModelInfo[] = prebuiltAppConfig.model_list
 				.filter(model => !model.model_id.includes('embed')) // Filter out embedding models
 				.map(model => ({
@@ -253,9 +253,7 @@ export default function Chat() {
 						model.low_resource_required || false
 					),
 					category: categorizeModel(
-						model.model_id,
-						model.vram_required_MB || 0,
-						model.low_resource_required || false
+						model.model_id
 					),
 					vramRequired: model.vram_required_MB || 0,
 					lowResource: model.low_resource_required || false,
@@ -282,25 +280,16 @@ export default function Chat() {
 	useEffect(() => {
 		if (!selectedModel) return
 
-		const initializeEngine = async () => {
+		async function initializeEngine() {
 			try {
 				setIsInitializing(true)
 				setError(null)
 
-				const initProgressCallback = (progress: any) => {
-					if (progress.event === 'init') {
-						setInitializationProgress(
-							`Initializing engine... ${Math.round(progress.progress * 100)}%`,
-						)
-					} else if (progress.event === 'load') {
-						setInitializationProgress(
-							`Loading model... ${Math.round(progress.progress * 100)}%`,
-						)
-					} else if (progress.event === 'compile') {
-						setInitializationProgress(
-							`Compiling model... ${Math.round(progress.progress * 100)}%`,
-						)
-					}
+				const initProgressCallback: InitProgressCallback = (progress) => {
+					const progressPercent = Math.round((progress.progress || 0) * 100)
+					setInitializationProgress(
+						`Initializing model... ${progressPercent}%`,
+					)
 				}
 
 				const newEngine = await CreateMLCEngine(selectedModel, {
@@ -336,7 +325,7 @@ export default function Chat() {
 		initializeEngine()
 	}, [selectedModel, availableModels])
 
-	const handleSendMessage = async () => {
+	async function handleSendMessage() {
 		if (!inputValue.trim() || isLoading || !engine) return
 
 		const userMessage: Message = {
@@ -359,7 +348,7 @@ export default function Chat() {
 				.map((tool) => `- ${tool.name}: ${tool.description}`)
 				.join('\n')
 
-			const llmMessages = [
+			const llmMessages: ChatCompletionMessageParam[] = [
 				{
 					role: 'system',
 					content: `You are a helpful AI assistant. Be concise and friendly in your responses.
@@ -373,7 +362,7 @@ To use a tool, format your response like this:
 Only use tools when explicitly requested or when it would be helpful for the user.`,
 				},
 				...messages.map((msg) => ({
-					role: msg.sender === 'user' ? 'user' : 'assistant',
+					role: (msg.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
 					content: msg.text,
 				})),
 				{ role: 'user', content: userMessage.text },
@@ -452,14 +441,14 @@ Only use tools when explicitly requested or when it would be helpful for the use
 		}
 	}
 
-	const handleKeyPress = (e: React.KeyboardEvent) => {
+	function handleKeyPress(e: React.KeyboardEvent) {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault()
 			handleSendMessage()
 		}
 	}
 
-	const handleModelChange = (modelId: string) => {
+	function handleModelChange(modelId: string) {
 		if (isLoading) return // Prevent changing model while loading
 		setSelectedModel(modelId)
 		setMessages([
@@ -473,7 +462,7 @@ Only use tools when explicitly requested or when it would be helpful for the use
 	}
 
 	// Group models by category
-	const groupedModels = availableModels.reduce((acc, model) => {
+	const groupedModels = availableModels.reduce(function(acc, model) {
 		if (!acc[model.category]) {
 			acc[model.category] = []
 		}
