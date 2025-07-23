@@ -27,6 +27,7 @@ export default defineConfig({
 	],
 	test: {
 		restoreMocks: true,
+		setupFiles: ['./tests/test-setup.ts'],
 		reporters: ['default', 'hanging-process'],
 	},
 })
