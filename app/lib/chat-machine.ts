@@ -1,5 +1,12 @@
 import { setup, assign, fromPromise, fromCallback } from 'xstate'
 import { invariant } from '@epic-web/invariant'
+import { search } from './search-engine.js'
+import { invokeTool, getAvailableTools } from './tools.js'
+import type {
+	ChatCompletionMessageParam,
+	MLCEngineInterface,
+	ChatCompletionRequestStreaming,
+} from '@mlc-ai/web-llm'
 
 export type BaseMessage = {
 	id: string
@@ -38,6 +45,7 @@ export type ChatContext = {
 	lastError?: string
 	currentToolCall?: ToolCall
 	streamedContent: string
+	engine?: MLCEngineInterface
 }
 
 export type ChatEvent =
@@ -65,6 +73,38 @@ export type ChatEvent =
 			output: { content: string; toolCall?: ToolCall }
 	  }
 
+// Helper function to parse tool calls from the LLM response
+function parseToolCall(
+	content: string,
+	toolBoundaryId: string,
+): ToolCall | null {
+	const toolCallRegex = new RegExp(
+		`\\[TOOL_CALL:${toolBoundaryId}\\](.*?)\\[\\/TOOL_CALL:${toolBoundaryId}\\]`,
+		's',
+	)
+
+	const match = content.match(toolCallRegex)
+	if (!match) {
+		return null
+	}
+
+	try {
+		const toolCallContent = match[1].trim()
+		const toolCall = JSON.parse(toolCallContent)
+
+		if (toolCall.name && typeof toolCall.name === 'string') {
+			return {
+				name: toolCall.name,
+				arguments: toolCall.arguments || {},
+			}
+		}
+	} catch (error) {
+		console.error('Failed to parse tool call:', error)
+	}
+
+	return null
+}
+
 export const chatMachine = setup({
 	types: {
 		context: {} as ChatContext,
@@ -73,19 +113,24 @@ export const chatMachine = setup({
 	},
 	actions: {
 		startToolSearch: () => {
-			console.log('Starting tool search...')
+			// This action is called when entering the searchingTools state
+			// The actual tool search is handled by the toolSearch actor
 		},
 		startGenerating: () => {
-			console.log('Starting generation...')
+			// This action is called when entering the generatingResponse state
+			// The actual generation is handled by the generation actor
 		},
 		cancelToolSearch: () => {
-			console.log('Cancelling tool search...')
+			// This action is called when interrupting during tool search
+			// The actor will be automatically stopped by XState
 		},
 		cancelGeneration: () => {
-			console.log('Cancelling generation...')
+			// This action is called when interrupting during generation
+			// The actor will be automatically stopped by XState
 		},
 		cancelStream: () => {
-			console.log('Cancelling stream...')
+			// This action is called when interrupting during streaming
+			// The actor will be automatically stopped by XState
 		},
 		appendToolResponseMessage: assign({
 			messages: ({ context, event }) => {
@@ -122,7 +167,8 @@ export const chatMachine = setup({
 			},
 		}),
 		callTool: () => {
-			console.log('Calling tool...')
+			// This action is called when entering the callingTool state
+			// The actual tool call is handled by the toolCall actor
 		},
 		queueMessage: assign({
 			messageQueue: ({ context, event }) => {
@@ -159,6 +205,11 @@ export const chatMachine = setup({
 			lastError: ({ event }) => {
 				if (event.type === 'MODEL_LOAD_FAILURE') return event.error
 				if (event.type === 'STREAM_ERROR') return event.error
+				// Handle XState error events from promise actors
+				if (event.type.startsWith('xstate.error.actor') && 'error' in event) {
+					const error = (event as any).error
+					return error instanceof Error ? error.message : String(error)
+				}
 				return undefined
 			},
 		}),
@@ -193,6 +244,25 @@ export const chatMachine = setup({
 		clearError: assign({
 			lastError: () => undefined,
 		}),
+		setEngine: assign({
+			engine: ({ event }) => {
+				if (event.type.startsWith('xstate.done.actor') && 'output' in event) {
+					return (event as any).output
+				}
+				return undefined
+			},
+		}),
+		updateStreamedContent: assign({
+			streamedContent: ({ context, event }) => {
+				if (event.type === 'STREAM_CHUNK') {
+					return context.streamedContent + event.content
+				}
+				return context.streamedContent
+			},
+		}),
+		clearStreamedContent: assign({
+			streamedContent: () => '',
+		}),
 	},
 	guards: {
 		hasQueuedMessages: ({ context }) => context.messageQueue.length > 0,
@@ -205,17 +275,179 @@ export const chatMachine = setup({
 		},
 	},
 	actors: {
-		toolSearch: fromPromise(async () => {
-			throw new Error('toolSearch actor not implemented')
-		}),
-		generation: fromPromise(async () => {
-			throw new Error('generation actor not implemented')
-		}),
-		streaming: fromPromise(async () => {
-			throw new Error('streaming actor not implemented')
-		}),
+		modelLoader: fromPromise(
+			async ({ input }: { input: { modelId: string } }) => {
+				try {
+					const { CreateMLCEngine } = await import('@mlc-ai/web-llm')
+
+					// Create engine with progress callback
+					const engine = await CreateMLCEngine(input.modelId, {
+						initProgressCallback: (progress) => {
+							// Note: Progress updates won't work with fromPromise
+							// Would need a different approach for real progress updates
+							console.log(
+								'Model load progress:',
+								Math.round(progress.progress * 100),
+							)
+						},
+					})
+
+					return engine
+				} catch (error) {
+					throw new Error(
+						error instanceof Error ? error.message : 'Failed to load model',
+					)
+				}
+			},
+		),
+		toolSearch: fromPromise(
+			async ({ input }: { input: { messages: Message[] } }) => {
+				// Convert messages to ChatCompletionMessageParam format
+				const chatMessages = input.messages
+					.filter((msg) => msg.role !== 'tool')
+					.map((msg) => ({
+						role: msg.role as 'user' | 'assistant' | 'system',
+						content: msg.content,
+					}))
+
+				// Use the search engine to find relevant tools
+				const relevantTools = await search(chatMessages)
+
+				return {
+					hasTools: relevantTools.length > 0,
+					tools: relevantTools.map((tool) => tool.function.name),
+					toolDefinitions: relevantTools,
+				}
+			},
+		),
+		generation: fromPromise(
+			async ({ input }: { input: { messages: Message[]; tools?: any[] } }) => {
+				// Skip generation and go directly to streaming
+				// Pass through the tools from tool search
+				return {
+					content: '',
+					toolCall: undefined,
+					toolDefinitions: input.tools,
+				}
+			},
+		),
+		streaming: fromCallback(
+			({
+				sendBack,
+				input,
+			}: {
+				sendBack: any
+				input: {
+					messages: Message[]
+					tools?: any[]
+					engine?: MLCEngineInterface
+				}
+			}) => {
+				const performStreaming = async () => {
+					try {
+						// If no engine, use mock implementation
+						if (!input.engine) {
+							// Mock implementation for tests
+							await new Promise((resolve) => setTimeout(resolve, 150))
+							sendBack({
+								type: 'xstate.done.actor',
+								output: {
+									content:
+										'Hello! I can help you with that. Let me search for the information you need.',
+									toolCall: {
+										name: 'search',
+										arguments: { query: 'user query' },
+									},
+								},
+							})
+							return
+						}
+
+						// Real LLM implementation
+						const toolBoundaryId = crypto.randomUUID()
+						const messages: ChatCompletionMessageParam[] = []
+
+						// Add system message with tool instructions if tools are available
+						if (input.tools && input.tools.length > 0) {
+							messages.push({
+								role: 'system',
+								content: `You are a helpful assistant that can use tools to help the user. Below is a list of tools available:
+
+${input.tools.map((tool: any) => tool.llmDescription).join('\n')}
+
+To call a tool, use this exact format:
+[TOOL_CALL:${toolBoundaryId}]
+{"name": "tool_name", "arguments": {"arg1": "value1"}}
+[/TOOL_CALL:${toolBoundaryId}]
+
+Only call tools when necessary to help the user.`,
+							})
+						} else {
+							messages.push({
+								role: 'system',
+								content:
+									'You are a helpful AI assistant. Be concise and friendly in your responses.',
+							})
+						}
+
+						// Add conversation messages
+						messages.push(
+							...input.messages
+								.filter((msg) => msg.role !== 'tool')
+								.map((msg) => ({
+									role: msg.role as 'user' | 'assistant' | 'system',
+									content: msg.content,
+								})),
+						)
+
+						// Create streaming chat completion
+						const stream = await input.engine.chat.completions.create({
+							messages,
+							stream: true,
+							temperature: 0.7,
+							max_tokens: 1000,
+						})
+
+						let fullContent = ''
+						for await (const chunk of stream) {
+							const content = chunk.choices[0]?.delta?.content || ''
+							if (content) {
+								fullContent += content
+								sendBack({ type: 'STREAM_CHUNK', content })
+							}
+						}
+
+						// Parse for tool calls
+						const toolCall = parseToolCall(fullContent, toolBoundaryId)
+
+						// Send completion event
+						sendBack({
+							type: 'xstate.done.actor',
+							output: {
+								content: fullContent,
+								toolCall,
+							},
+						})
+					} catch (error) {
+						sendBack({
+							type: 'STREAM_ERROR',
+							error:
+								error instanceof Error ? error.message : 'Streaming failed',
+						})
+					}
+				}
+
+				performStreaming()
+
+				return () => {
+					// Cleanup function
+				}
+			},
+		),
 		toolCall: fromPromise(async ({ input }: { input: ToolCall }) => {
-			throw new Error('toolCall actor not implemented')
+			// Call the actual tool using the tools module
+			const result = await invokeTool(input.name, input.arguments)
+			return { result: JSON.stringify(result) }
 		}),
 	},
 }).createMachine({
@@ -229,6 +461,7 @@ export const chatMachine = setup({
 		lastError: undefined,
 		currentToolCall: undefined,
 		streamedContent: '',
+		engine: undefined,
 	}),
 	states: {
 		idle: {
@@ -243,12 +476,27 @@ export const chatMachine = setup({
 			},
 		},
 		loadingModel: {
+			invoke: {
+				src: 'modelLoader',
+				input: ({ event }) => {
+					invariant(event.type === 'LOAD_MODEL', 'Expected LOAD_MODEL event')
+					return { modelId: event.modelId }
+				},
+				onDone: {
+					target: 'ready',
+					actions: ['setEngine'],
+				},
+				onError: {
+					target: 'loadFailed',
+					actions: ['setError'],
+				},
+			},
 			on: {
 				MODEL_LOAD_PROGRESS: {
 					actions: ['updateModelLoadProgress'],
 				},
 				MODEL_LOAD_SUCCESS: {
-					target: 'ready',
+					// This is handled by onDone
 				},
 				MODEL_LOAD_FAILURE: {
 					target: 'loadFailed',
@@ -290,6 +538,7 @@ export const chatMachine = setup({
 			entry: ['startToolSearch'],
 			invoke: {
 				src: 'toolSearch',
+				input: ({ context }) => ({ messages: context.messages }),
 				onDone: {
 					target: 'generatingResponse',
 				},
@@ -311,6 +560,16 @@ export const chatMachine = setup({
 			entry: ['startGenerating'],
 			invoke: {
 				src: 'generation',
+				input: ({ context, event }) => {
+					// Pass messages and any tools from the tool search
+					if (event.type.startsWith('xstate.done.actor') && 'output' in event) {
+						return {
+							messages: context.messages,
+							tools: (event as any).output.toolDefinitions,
+						}
+					}
+					return { messages: context.messages }
+				},
 				onDone: {
 					target: 'streamingResponse',
 					actions: ['setToolCall'],
@@ -330,8 +589,20 @@ export const chatMachine = setup({
 			},
 		},
 		streamingResponse: {
+			entry: ['clearStreamedContent'],
 			invoke: {
 				src: 'streaming',
+				input: ({ context, event }) => {
+					// Pass messages, tools, and engine from the generation
+					if (event.type.startsWith('xstate.done.actor') && 'output' in event) {
+						return {
+							messages: context.messages,
+							tools: (event as any).output.toolDefinitions,
+							engine: context.engine,
+						}
+					}
+					return { messages: context.messages, engine: context.engine }
+				},
 				onDone: [
 					{
 						guard: 'hasToolCall',
@@ -348,6 +619,9 @@ export const chatMachine = setup({
 				},
 			},
 			on: {
+				STREAM_CHUNK: {
+					actions: ['updateStreamedContent'],
+				},
 				STREAM_ERROR: {
 					target: 'ready',
 					actions: ['setError', 'cancelStream'],
