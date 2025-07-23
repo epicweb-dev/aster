@@ -1,6 +1,6 @@
-import { test, expect, vi } from 'vitest'
+import { test, expect, vi, afterEach } from 'vitest'
 import { chatMachine } from './chat-machine'
-import { createActor, fromPromise } from 'xstate'
+import { createActor, fromPromise, Actor, type AnyStateMachine } from 'xstate'
 
 vi.mock('./search-engine', () => ({
 	search: vi.fn(),
@@ -15,6 +15,21 @@ vi.mock('./tools', () => ({
 vi.mock('@mlc-ai/web-llm', () => ({
 	createMLCEngine: vi.fn(),
 }))
+
+// Disposable actor utility following the pattern from the article
+function createDisposableActor<Machine extends AnyStateMachine>(
+	machine: Machine,
+	options?: any,
+) {
+	const actor = createActor(machine, options)
+
+	return {
+		actor,
+		[Symbol.dispose]() {
+			actor.stop()
+		},
+	}
+}
 
 // Utility function to wait for assertions to pass
 async function waitFor(
@@ -127,91 +142,111 @@ function createChatMachineWithActors(actors: {
 }
 
 test('should start in idle state', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
-	expect(actor.getSnapshot().value).toBe('idle')
+	expect(disposableActor.actor.getSnapshot().value).toBe('idle')
 })
 
 test('should transition to loadingModel when LOAD_MODEL is sent', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
 	})
 
-	expect(actor.getSnapshot().value).toBe('loadingModel')
-	expect(actor.getSnapshot().context.currentModelId).toBe(
+	expect(disposableActor.actor.getSnapshot().value).toBe('loadingModel')
+	expect(disposableActor.actor.getSnapshot().context.currentModelId).toBe(
 		'Llama-3.1-8B-Instruct-q4f32_1-MLC',
 	)
 })
 
 test('should handle model load progress', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'MODEL_LOAD_PROGRESS',
 		progress: 50,
 	})
 
-	expect(actor.getSnapshot().context.modelLoadProgress).toBe(50)
+	expect(disposableActor.actor.getSnapshot().context.modelLoadProgress).toBe(50)
 })
 
 test('should transition to ready on model load success', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
 
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
-	expect(actor.getSnapshot().value).toBe('ready')
+	expect(disposableActor.actor.getSnapshot().value).toBe('ready')
 })
 
 test('should transition to loadFailed on model load failure', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'MODEL_LOAD_FAILURE',
 		error: 'Failed to load model',
 	})
 
-	expect(actor.getSnapshot().value).toBe('loadFailed')
-	expect(actor.getSnapshot().context.lastError).toBe('Failed to load model')
+	expect(disposableActor.actor.getSnapshot().value).toBe('loadFailed')
+	expect(disposableActor.actor.getSnapshot().context.lastError).toBe(
+		'Failed to load model',
+	)
 })
 
 test('should queue messages when in idle state', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
 	const message = {
 		id: '1',
@@ -220,20 +255,27 @@ test('should queue messages when in idle state', () => {
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
 
-	expect(actor.getSnapshot().context.messageQueue).toHaveLength(1)
-	expect(actor.getSnapshot().context.messageQueue[0]).toEqual(message)
+	expect(disposableActor.actor.getSnapshot().context.messageQueue).toHaveLength(
+		1,
+	)
+	expect(disposableActor.actor.getSnapshot().context.messageQueue[0]).toEqual(
+		message,
+	)
 })
 
 test('should process queued messages when transitioning to ready', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
 	const message = {
 		id: '1',
@@ -242,34 +284,39 @@ test('should process queued messages when transitioning to ready', () => {
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
 
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
-	expect(actor.getSnapshot().context.messages).toHaveLength(1)
-	expect(actor.getSnapshot().context.messageQueue).toHaveLength(0)
+	expect(disposableActor.actor.getSnapshot().context.messages).toHaveLength(1)
+	expect(disposableActor.actor.getSnapshot().context.messageQueue).toHaveLength(
+		0,
+	)
 })
 
 test('should transition to searchingTools when message is queued in ready state', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message
 	const message = {
@@ -279,12 +326,12 @@ test('should transition to searchingTools when message is queued in ready state'
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
 
-	expect(actor.getSnapshot().value).toBe('searchingTools')
+	expect(disposableActor.actor.getSnapshot().value).toBe('searchingTools')
 })
 
 test('should handle tool search completion and transition to generatingResponse', async () => {
@@ -302,7 +349,7 @@ test('should handle tool search completion and transition to generatingResponse'
 		toolCall?: any
 	}>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -316,14 +363,14 @@ test('should handle tool search completion and transition to generatingResponse'
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger tool search
 	const message = {
@@ -333,20 +380,24 @@ test('should handle tool search completion and transition to generatingResponse'
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
 
 	// Wait for tool search to start
-	await waitFor(() => expect(actor.getSnapshot().value).toBe('searchingTools'))
+	await waitFor(() =>
+		expect(disposableActor.actor.getSnapshot().value).toBe('searchingTools'),
+	)
 
 	// Resolve tool search to trigger transition to generating
 	toolSearchDeferred.resolve({ hasTools: true, tools: ['search'] })
 
 	// Wait for tool search to complete and transition to generating
 	await waitFor(() =>
-		expect(actor.getSnapshot().value).toBe('generatingResponse'),
+		expect(disposableActor.actor.getSnapshot().value).toBe(
+			'generatingResponse',
+		),
 	)
 })
 
@@ -365,7 +416,7 @@ test('should handle generation completion and transition to streamingResponse', 
 		toolCall?: any
 	}>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -379,14 +430,14 @@ test('should handle generation completion and transition to streamingResponse', 
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger the flow
 	const message = {
@@ -396,7 +447,7 @@ test('should handle generation completion and transition to streamingResponse', 
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -406,7 +457,9 @@ test('should handle generation completion and transition to streamingResponse', 
 
 	// Wait for generation to start
 	await waitFor(() =>
-		expect(actor.getSnapshot().value).toBe('generatingResponse'),
+		expect(disposableActor.actor.getSnapshot().value).toBe(
+			'generatingResponse',
+		),
 	)
 
 	// Resolve generation to trigger transition to streaming
@@ -414,7 +467,10 @@ test('should handle generation completion and transition to streamingResponse', 
 
 	// Wait for generation to complete
 	await waitFor(
-		() => expect(actor.getSnapshot().value).toBe('streamingResponse'),
+		() =>
+			expect(disposableActor.actor.getSnapshot().value).toBe(
+				'streamingResponse',
+			),
 		{ timeout: 50 },
 	)
 })
@@ -434,7 +490,7 @@ test('should handle streaming completion with tool call and transition to waitin
 		toolCall?: any
 	}>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -448,14 +504,14 @@ test('should handle streaming completion with tool call and transition to waitin
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger the flow
 	const message = {
@@ -465,7 +521,7 @@ test('should handle streaming completion with tool call and transition to waitin
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -484,7 +540,10 @@ test('should handle streaming completion with tool call and transition to waitin
 
 	// Wait for streaming to complete
 	await waitFor(
-		() => expect(actor.getSnapshot().value).toBe('waitingForToolApproval'),
+		() =>
+			expect(disposableActor.actor.getSnapshot().value).toBe(
+				'waitingForToolApproval',
+			),
 		{ timeout: 50 },
 	)
 })
@@ -504,7 +563,7 @@ test('should handle tool approval and transition to callingTool', async () => {
 		toolCall?: any
 	}>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -518,14 +577,14 @@ test('should handle tool approval and transition to callingTool', async () => {
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger the flow
 	const message = {
@@ -535,7 +594,7 @@ test('should handle tool approval and transition to callingTool', async () => {
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -554,14 +613,17 @@ test('should handle tool approval and transition to callingTool', async () => {
 
 	// Wait for streaming to complete
 	await waitFor(
-		() => expect(actor.getSnapshot().value).toBe('waitingForToolApproval'),
+		() =>
+			expect(disposableActor.actor.getSnapshot().value).toBe(
+				'waitingForToolApproval',
+			),
 		{ timeout: 50 },
 	)
 
 	// Approve tool call
-	actor.send({ type: 'APPROVE_TOOL_CALL' })
+	disposableActor.actor.send({ type: 'APPROVE_TOOL_CALL' })
 
-	expect(actor.getSnapshot().value).toBe('callingTool')
+	expect(disposableActor.actor.getSnapshot().value).toBe('callingTool')
 })
 
 test('should handle tool rejection and transition back to searchingTools', async () => {
@@ -579,7 +641,7 @@ test('should handle tool rejection and transition back to searchingTools', async
 		toolCall?: any
 	}>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -593,14 +655,14 @@ test('should handle tool rejection and transition back to searchingTools', async
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger the flow
 	const message = {
@@ -610,7 +672,7 @@ test('should handle tool rejection and transition back to searchingTools', async
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -629,29 +691,35 @@ test('should handle tool rejection and transition back to searchingTools', async
 
 	// Wait for streaming to complete
 	await waitFor(
-		() => expect(actor.getSnapshot().value).toBe('waitingForToolApproval'),
+		() =>
+			expect(disposableActor.actor.getSnapshot().value).toBe(
+				'waitingForToolApproval',
+			),
 		{ timeout: 50 },
 	)
 
 	// Reject tool call
-	actor.send({ type: 'REJECT_TOOL_CALL' })
+	disposableActor.actor.send({ type: 'REJECT_TOOL_CALL' })
 
-	expect(actor.getSnapshot().value).toBe('searchingTools')
-	expect(actor.getSnapshot().context.messages).toHaveLength(3) // user message + assistant message + rejection message
+	expect(disposableActor.actor.getSnapshot().value).toBe('searchingTools')
+	expect(disposableActor.actor.getSnapshot().context.messages).toHaveLength(3) // user message + assistant message + rejection message
 })
 
 test('should handle interruption during tool search', async () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger tool search
 	const message = {
@@ -661,15 +729,15 @@ test('should handle interruption during tool search', async () => {
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
 
 	// Interrupt during tool search
-	actor.send({ type: 'INTERRUPT' })
+	disposableActor.actor.send({ type: 'INTERRUPT' })
 
-	expect(actor.getSnapshot().value).toBe('ready')
+	expect(disposableActor.actor.getSnapshot().value).toBe('ready')
 })
 
 test('should handle interruption during generation', async () => {
@@ -683,7 +751,7 @@ test('should handle interruption during generation', async () => {
 		toolCall?: any
 	}>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -694,14 +762,14 @@ test('should handle interruption during generation', async () => {
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger the flow
 	const message = {
@@ -711,7 +779,7 @@ test('should handle interruption during generation', async () => {
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -721,13 +789,15 @@ test('should handle interruption during generation', async () => {
 
 	// Wait for generation to start
 	await waitFor(() =>
-		expect(actor.getSnapshot().value).toBe('generatingResponse'),
+		expect(disposableActor.actor.getSnapshot().value).toBe(
+			'generatingResponse',
+		),
 	)
 
 	// Interrupt during generation
-	actor.send({ type: 'INTERRUPT' })
+	disposableActor.actor.send({ type: 'INTERRUPT' })
 
-	expect(actor.getSnapshot().value).toBe('ready')
+	expect(disposableActor.actor.getSnapshot().value).toBe('ready')
 })
 
 test('should handle interruption during streaming', async () => {
@@ -745,7 +815,7 @@ test('should handle interruption during streaming', async () => {
 		toolCall?: any
 	}>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -759,14 +829,14 @@ test('should handle interruption during streaming', async () => {
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger the flow
 	const message = {
@@ -776,7 +846,7 @@ test('should handle interruption during streaming', async () => {
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -789,13 +859,13 @@ test('should handle interruption during streaming', async () => {
 
 	// Wait for streaming to start
 	await waitFor(() =>
-		expect(actor.getSnapshot().value).toBe('streamingResponse'),
+		expect(disposableActor.actor.getSnapshot().value).toBe('streamingResponse'),
 	)
 
 	// Interrupt during streaming
-	actor.send({ type: 'INTERRUPT' })
+	disposableActor.actor.send({ type: 'INTERRUPT' })
 
-	expect(actor.getSnapshot().value).toBe('ready')
+	expect(disposableActor.actor.getSnapshot().value).toBe('ready')
 })
 
 test('should handle interruption during tool approval (implicit rejection)', async () => {
@@ -813,7 +883,7 @@ test('should handle interruption during tool approval (implicit rejection)', asy
 		toolCall?: any
 	}>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -827,14 +897,14 @@ test('should handle interruption during tool approval (implicit rejection)', asy
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger the flow
 	const message = {
@@ -844,7 +914,7 @@ test('should handle interruption during tool approval (implicit rejection)', asy
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -863,15 +933,18 @@ test('should handle interruption during tool approval (implicit rejection)', asy
 
 	// Wait for streaming to complete
 	await waitFor(
-		() => expect(actor.getSnapshot().value).toBe('waitingForToolApproval'),
+		() =>
+			expect(disposableActor.actor.getSnapshot().value).toBe(
+				'waitingForToolApproval',
+			),
 		{ timeout: 50 },
 	)
 
 	// Interrupt during tool approval (implicit rejection)
-	actor.send({ type: 'INTERRUPT' })
+	disposableActor.actor.send({ type: 'INTERRUPT' })
 
-	expect(actor.getSnapshot().value).toBe('searchingTools')
-	expect(actor.getSnapshot().context.messages).toHaveLength(3) // user message + assistant message + rejection message
+	expect(disposableActor.actor.getSnapshot().value).toBe('searchingTools')
+	expect(disposableActor.actor.getSnapshot().context.messages).toHaveLength(3) // user message + assistant message + rejection message
 })
 
 test('should handle interruption during tool call (implicit rejection)', async () => {
@@ -890,7 +963,7 @@ test('should handle interruption during tool call (implicit rejection)', async (
 	}>()
 	const toolCallDeferred = createDeferred<{ result: string }>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -907,14 +980,14 @@ test('should handle interruption during tool call (implicit rejection)', async (
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger the flow
 	const message = {
@@ -924,7 +997,7 @@ test('should handle interruption during tool call (implicit rejection)', async (
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -943,18 +1016,21 @@ test('should handle interruption during tool call (implicit rejection)', async (
 
 	// Wait for streaming to complete
 	await waitFor(
-		() => expect(actor.getSnapshot().value).toBe('waitingForToolApproval'),
+		() =>
+			expect(disposableActor.actor.getSnapshot().value).toBe(
+				'waitingForToolApproval',
+			),
 		{ timeout: 50 },
 	)
 
 	// Approve tool call
-	actor.send({ type: 'APPROVE_TOOL_CALL' })
+	disposableActor.actor.send({ type: 'APPROVE_TOOL_CALL' })
 
 	// Interrupt during tool call
-	actor.send({ type: 'INTERRUPT' })
+	disposableActor.actor.send({ type: 'INTERRUPT' })
 
-	expect(actor.getSnapshot().value).toBe('searchingTools')
-	expect(actor.getSnapshot().context.messages).toHaveLength(3) // user message + assistant message + rejection message
+	expect(disposableActor.actor.getSnapshot().value).toBe('searchingTools')
+	expect(disposableActor.actor.getSnapshot().context.messages).toHaveLength(3) // user message + assistant message + rejection message
 })
 
 test('should handle stream error and transition to ready', async () => {
@@ -972,7 +1048,7 @@ test('should handle stream error and transition to ready', async () => {
 		toolCall?: any
 	}>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -986,14 +1062,14 @@ test('should handle stream error and transition to ready', async () => {
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model first
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue a message to trigger the flow
 	const message = {
@@ -1003,7 +1079,7 @@ test('should handle stream error and transition to ready', async () => {
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -1016,47 +1092,57 @@ test('should handle stream error and transition to ready', async () => {
 
 	// Wait for streaming to start
 	await waitFor(() =>
-		expect(actor.getSnapshot().value).toBe('streamingResponse'),
+		expect(disposableActor.actor.getSnapshot().value).toBe('streamingResponse'),
 	)
 
 	// Send stream error
-	actor.send({
+	disposableActor.actor.send({
 		type: 'STREAM_ERROR',
 		error: 'Stream failed',
 	})
 
-	expect(actor.getSnapshot().value).toBe('ready')
-	expect(actor.getSnapshot().context.lastError).toBe('Stream failed')
+	expect(disposableActor.actor.getSnapshot().value).toBe('ready')
+	expect(disposableActor.actor.getSnapshot().context.lastError).toBe(
+		'Stream failed',
+	)
 })
 
 test('should handle switching model mid-interaction', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
 	// Load first model
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'model-1',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Switch to different model
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'model-2',
 	})
 
-	expect(actor.getSnapshot().value).toBe('loadingModel')
-	expect(actor.getSnapshot().context.currentModelId).toBe('model-2')
+	expect(disposableActor.actor.getSnapshot().value).toBe('loadingModel')
+	expect(disposableActor.actor.getSnapshot().context.currentModelId).toBe(
+		'model-2',
+	)
 })
 
 test('should handle queued messages being processed correctly', () => {
-	const actor = createActor(createChatMachineWithActors({}), {
-		input: { initialMessages: [] },
-	})
-	actor.start()
+	using disposableActor = createDisposableActor(
+		createChatMachineWithActors({}),
+		{
+			input: { initialMessages: [] },
+		},
+	)
+	disposableActor.actor.start()
 
 	// Queue multiple messages
 	const message1 = {
@@ -1073,27 +1159,33 @@ test('should handle queued messages being processed correctly', () => {
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message: message1,
 	})
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message: message2,
 	})
 
 	// Load model to trigger processing
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
-	expect(actor.getSnapshot().context.messages).toHaveLength(2)
-	expect(actor.getSnapshot().context.messageQueue).toHaveLength(0)
-	expect(actor.getSnapshot().context.messages[0]).toEqual(message1)
-	expect(actor.getSnapshot().context.messages[1]).toEqual(message2)
+	expect(disposableActor.actor.getSnapshot().context.messages).toHaveLength(2)
+	expect(disposableActor.actor.getSnapshot().context.messageQueue).toHaveLength(
+		0,
+	)
+	expect(disposableActor.actor.getSnapshot().context.messages[0]).toEqual(
+		message1,
+	)
+	expect(disposableActor.actor.getSnapshot().context.messages[1]).toEqual(
+		message2,
+	)
 })
 
 test('should handle full happy path interaction', async () => {
@@ -1112,7 +1204,7 @@ test('should handle full happy path interaction', async () => {
 	}>()
 	const toolCallDeferred = createDeferred<{ result: string }>()
 
-	const actor = createActor(
+	using disposableActor = createDisposableActor(
 		createChatMachineWithActors({
 			toolSearch: fromPromise(async () => {
 				return toolSearchDeferred.promise
@@ -1129,14 +1221,14 @@ test('should handle full happy path interaction', async () => {
 		}),
 		{ input: { initialMessages: [] } },
 	)
-	actor.start()
+	disposableActor.actor.start()
 
 	// Load model
-	actor.send({
+	disposableActor.actor.send({
 		type: 'LOAD_MODEL',
 		modelId: 'test-model',
 	})
-	actor.send({ type: 'MODEL_LOAD_SUCCESS' })
+	disposableActor.actor.send({ type: 'MODEL_LOAD_SUCCESS' })
 
 	// Queue message
 	const message = {
@@ -1146,7 +1238,7 @@ test('should handle full happy path interaction', async () => {
 		timestamp: new Date(),
 	}
 
-	actor.send({
+	disposableActor.actor.send({
 		type: 'QUEUE_MESSAGE',
 		message,
 	})
@@ -1156,7 +1248,9 @@ test('should handle full happy path interaction', async () => {
 
 	// Wait for tool search
 	await waitFor(() =>
-		expect(actor.getSnapshot().value).toBe('generatingResponse'),
+		expect(disposableActor.actor.getSnapshot().value).toBe(
+			'generatingResponse',
+		),
 	)
 
 	// Resolve generation
@@ -1164,7 +1258,7 @@ test('should handle full happy path interaction', async () => {
 
 	// Wait for generation
 	await waitFor(() =>
-		expect(actor.getSnapshot().value).toBe('streamingResponse'),
+		expect(disposableActor.actor.getSnapshot().value).toBe('streamingResponse'),
 	)
 
 	// Resolve streaming with tool call
@@ -1175,13 +1269,16 @@ test('should handle full happy path interaction', async () => {
 
 	// Wait for streaming to complete and reach waitingForToolApproval
 	await waitFor(
-		() => expect(actor.getSnapshot().value).toBe('waitingForToolApproval'),
+		() =>
+			expect(disposableActor.actor.getSnapshot().value).toBe(
+				'waitingForToolApproval',
+			),
 		{ timeout: 50 },
 	)
 
 	// Approve tool call
-	actor.send({ type: 'APPROVE_TOOL_CALL' })
-	expect(actor.getSnapshot().value).toBe('callingTool')
+	disposableActor.actor.send({ type: 'APPROVE_TOOL_CALL' })
+	expect(disposableActor.actor.getSnapshot().value).toBe('callingTool')
 
 	// Resolve tool call
 	toolCallDeferred.resolve({
@@ -1191,12 +1288,12 @@ test('should handle full happy path interaction', async () => {
 	// Wait for tool call to complete
 	await waitFor(() => {
 		// The tool call should complete and add the tool message
-		const messages = actor.getSnapshot().context.messages
+		const messages = disposableActor.actor.getSnapshot().context.messages
 		expect(messages.length).toBeGreaterThanOrEqual(3) // user + assistant + tool
 	})
 
 	// Verify messages were added correctly
-	const messages = actor.getSnapshot().context.messages
+	const messages = disposableActor.actor.getSnapshot().context.messages
 	expect(messages[0].role).toBe('user')
 	expect(messages[1].role).toBe('assistant')
 	expect(messages[2].role).toBe('tool')
