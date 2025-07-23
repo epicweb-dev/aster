@@ -1,7 +1,7 @@
 import { createActor, type ActorRefFrom } from 'xstate'
 import { useSelector } from '@xstate/react'
-import { chatMachine } from '../lib/chat-machine'
-import { type Route } from './+types/chat'
+import { chatMachine } from '../lib/chat-machine-old'
+import { type Route } from './+types/chat-old'
 import { useAutoScroll } from '../lib/use-autoscroll'
 
 // Not sure why, but we get type errors without the explicit return type 🤷‍♂️

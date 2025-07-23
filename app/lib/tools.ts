@@ -9,7 +9,7 @@ type ToolDefinition = {
 
 const tools = new Map<string, ToolDefinition>()
 
-export function defineTool(
+function defineTool(
 	name: string,
 	config: Omit<ChatCompletionTool, 'type'>,
 	callback: ToolCallback,

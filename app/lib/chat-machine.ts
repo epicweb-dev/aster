@@ -1,920 +1,401 @@
 import { setup, assign, fromPromise, fromCallback } from 'xstate'
 import { invariant } from '@epic-web/invariant'
-import type {
-	MLCEngineConfig,
-	ChatOptions,
-	MLCEngineInterface,
-	ChatCompletionChunk,
-	ChatCompletionRequestStreaming,
-} from '@mlc-ai/web-llm'
-import { search } from './search-engine'
-import { invokeTool } from './tools'
 
-// Types
-type Message = {
+export type BaseMessage = {
 	id: string
-	role: 'user' | 'assistant' | 'system' | 'tool'
 	content: string
 	timestamp: Date
-	isStreaming?: boolean
-	toolCall?: { name: string; arguments: Record<string, any> } | null
-	toolResult?: any
 }
 
-type ChatContext = {
-	// UI State
+export type UserMessage = BaseMessage & { role: 'user' }
+export type AssistantMessage = BaseMessage & { role: 'assistant' }
+export type SystemMessage = BaseMessage & { role: 'system' }
+export type ToolMessage = BaseMessage & {
+	role: 'tool'
+	toolCall: {
+		name: string
+		arguments: Record<string, any>
+		result?: string
+	}
+}
+
+export type Message =
+	| UserMessage
+	| AssistantMessage
+	| SystemMessage
+	| ToolMessage
+
+export type ToolCall = {
+	name: string
+	arguments: Record<string, any>
+}
+
+export type ChatContext = {
 	messages: Message[]
-	inputValue: string
-	isLoading: boolean
-	isStreaming: boolean
+	messageQueue: Message[]
+	currentModelId?: string
+	modelLoadProgress: number
+	lastError?: string
+	currentToolCall?: ToolCall
 	streamedContent: string
-	error: string | null
-	messageQueue: string[]
-
-	// LLM State
-	engine: MLCEngineInterface | null
-	modelId: string | null
-	isModelLoaded: boolean
-	modelLoadingProgress: number
-	usage: {
-		promptTokens: number
-		completionTokens: number
-		totalTokens: number
-	} | null
-
-	// Tool State
-	pendingToolCall: { name: string; arguments: Record<string, any> } | null
-	toolResult: any | null
-
-	// Configuration
-	loggingEnabled: boolean
 }
 
-type ChatEvents =
-	| { type: 'SET_INPUT'; value: string }
-	| { type: 'SEND_MESSAGE' }
-	| { type: 'CLEAR_CHAT' }
+export type ChatEvent =
+	| { type: 'LOAD_MODEL'; modelId: string }
+	| { type: 'QUEUE_MESSAGE'; message: Message }
+	| { type: 'MODEL_LOAD_PROGRESS'; progress: number }
+	| { type: 'MODEL_LOAD_SUCCESS' }
+	| { type: 'MODEL_LOAD_FAILURE'; error: string }
+	| { type: 'INTERRUPT' }
+	| { type: 'APPROVE_TOOL_CALL' }
+	| { type: 'REJECT_TOOL_CALL' }
+	| { type: 'STREAM_ERROR'; error: string }
+	| { type: 'STREAM_CHUNK'; content: string }
+	| { type: 'STREAM_COMPLETE'; content: string; toolCall?: ToolCall }
+	| { type: 'RETRY_TOOL_SEARCH' }
+	| { type: 'RETRY_GENERATION' }
+	| { type: 'RETRY_TOOL_CALL' }
+	| { type: 'done.invoke.toolCall'; output: { result: string } }
 	| {
-			type: 'LOAD_MODEL'
-			modelId: string
-			engineConfig?: MLCEngineConfig
-			chatOpts?: ChatOptions
-	  }
-	| { type: 'MODEL_LOADING_PROGRESS'; progress: { progress: number } }
-	| { type: 'START_STREAMING'; messageId: string }
-	| {
-			type: 'STREAM_CHUNK'
-			content: string
-			chunk: ChatCompletionChunk
-			messageId: string
-	  }
-	| { type: 'UPDATE_MESSAGE'; messageId: string; content: string }
-	| { type: 'CREATE_ASSISTANT_MESSAGE'; messageId: string }
-	| {
-			type: 'CHAT_COMPLETION_RECEIVED'
-			content: string
-			isComplete: boolean
-			messageId: string
-			usage?: any
-	  }
-	| { type: 'CHAT_ERROR'; error: string }
-	| { type: 'SET_LOGGING_ENABLED'; enabled: boolean }
-	| {
-			type: 'TOOL_CALL_RECEIVED'
-			toolCall: { name: string; arguments: Record<string, any> } | null
+			type: 'done.invoke.generation'
+			output: { content: string; toolCall?: ToolCall }
 	  }
 	| {
-			type: 'TOOL_RESULT_RECEIVED'
-			result: any
-			messageId: string
+			type: 'done.invoke.streaming'
+			output: { content: string; toolCall?: ToolCall }
 	  }
-	| { type: 'APPROVE_TOOL_EXECUTION' }
-	| { type: 'REJECT_TOOL_EXECUTION' }
 
-// Actor implementations
-const createEngineActor = fromPromise(
-	async ({
-		input,
-	}: {
-		input: {
-			modelId: string
-			engineConfig?: MLCEngineConfig
-			chatOpts?: ChatOptions | Array<ChatOptions>
-		}
-	}) => {
-		const { CreateMLCEngine } = await import('@mlc-ai/web-llm')
-
-		const engine = await CreateMLCEngine(
-			input.modelId,
-			input.engineConfig,
-			input.chatOpts,
-		)
-
-		return engine
-	},
-)
-
-const toolInvocationActor = fromPromise(
-	async ({
-		input,
-	}: {
-		input: {
-			toolCall: { name: string; arguments: Record<string, any> }
-		}
-	}) => {
-		const { toolCall } = input
-		console.log(
-			'Invoking tool:',
-			toolCall.name,
-			'with arguments:',
-			toolCall.arguments,
-		)
-		return await invokeTool(toolCall.name, toolCall.arguments)
-	},
-)
-
-const chatCompletionActor = fromCallback(
-	({
-		sendBack,
-		input,
-	}: {
-		sendBack: any
-		input: {
-			engine: MLCEngineInterface
-			options: ChatCompletionRequestStreaming
-		}
-	}) => {
-		const { engine, options } = input
-
-		const performChat = async () => {
-			try {
-				// Generate message ID for this streaming session
-				const messageId = crypto.randomUUID()
-
-				// Handle streaming
-				sendBack({ type: 'START_STREAMING', messageId })
-
-				const tools = await search(options.messages)
-
-				const toolBoundaryId = crypto.randomUUID()
-
-				const chunks = await engine.chat.completions.create({
-					...options,
-					messages: [
-						{
-							role: 'system',
-							content: tools.length
-								? `
-You are a helpful assistant that can use tools to help the user. Below is a list of tools and a user message. Use the tools to help the user.
-
-${tools.map((tool) => tool.llmDescription).join('\n')}
-
-You can respond to the user and then call a tool. To call a tool, you must use the following format:
-
-[TOOL_CALL:${toolBoundaryId}]
-{"name": "tool_name", "arguments": {}}
-[/TOOL_CALL:${toolBoundaryId}]
-
-You can also provide arguments to a tool:
-
-[TOOL_CALL:${toolBoundaryId}]
-{"name": "tool_name","arguments": {"argument_name": "argument_value"}}
-[/TOOL_CALL:${toolBoundaryId}]
-
-Here's a real example of a tool call:
-
-[TOOL_CALL:${toolBoundaryId}]
-{"name": "send_greeting","arguments": {"greeting": "Hello, world!"}}
-[/TOOL_CALL:${toolBoundaryId}]
-									`.trim()
-								: 'You are a helpful AI assistant. Be concise and friendly in your responses.',
-						},
-						...options.messages,
-					],
-					stream: true,
-					stream_options: { include_usage: true },
-				})
-				console.log('starting to process chunks', chunks)
-
-				let fullContent = ''
-				for await (const chunk of chunks) {
-					console.log(chunk)
-					const content = chunk.choices[0]?.delta.content || ''
-					fullContent += content
-
-					sendBack({
-						type: 'STREAM_CHUNK',
-						chunk,
-						content,
-						messageId,
-						isComplete: false,
-					})
-				}
-
-				// Get final message
-				const finalMessage = await engine.getMessage()
-
-				sendBack({
-					type: 'CHAT_COMPLETION_RECEIVED',
-					content: finalMessage,
-					isComplete: true,
-					messageId,
-					usage: null, // Usage is included in the last chunk
-				})
-
-				const toolCall = parseToolCall(finalMessage, toolBoundaryId)
-
-				if (toolCall) {
-					sendBack({
-						type: 'TOOL_CALL_RECEIVED',
-						toolCall: toolCall,
-					})
-				}
-			} catch (error) {
-				sendBack({
-					type: 'CHAT_ERROR',
-					error:
-						error instanceof Error ? error.message : 'Unknown error occurred',
-				})
-			}
-		}
-
-		performChat()
-
-		return () => {
-			// Cleanup function
-		}
-	},
-)
-
-// Helper function to parse tool calls from the final message
-function parseToolCall(
-	message: string,
-	toolBoundaryId: string,
-): { name: string; arguments: Record<string, any> } | null {
-	// Look for tool call pattern: [TOOL_CALL:boundaryId]...[/TOOL_CALL:boundaryId]
-	const toolCallRegex = new RegExp(
-		`\\[TOOL_CALL:${toolBoundaryId}\\](.*?)\\[\\/TOOL_CALL:${toolBoundaryId}\\]`,
-		's',
-	)
-
-	const match = message.match(toolCallRegex)
-	if (!match) {
-		return null
-	}
-
-	try {
-		const toolCallContent = match[1].trim()
-		const toolCall = JSON.parse(toolCallContent)
-
-		if (toolCall.name && typeof toolCall.name === 'string') {
-			return {
-				name: toolCall.name,
-				arguments: toolCall.arguments || {},
-			}
-		}
-	} catch (error) {
-		console.error('Failed to parse tool call:', error)
-	}
-
-	return null
-}
-
-// Create the merged state machine
 export const chatMachine = setup({
 	types: {
 		context: {} as ChatContext,
-		events: {} as ChatEvents,
-	},
-	actors: {
-		createEngine: createEngineActor,
-		chatCompletion: chatCompletionActor,
-		toolInvocation: toolInvocationActor,
+		events: {} as ChatEvent,
+		input: {} as { initialMessages?: Message[] },
 	},
 	actions: {
-		logTransition: ({ event, context }) => {
-			if (context.loggingEnabled) {
-				console.log(`[ChatMachine] Transition:`, event.type, {
-					event,
-					context: {
-						messagesCount: context.messages.length,
-						isLoading: context.isLoading,
-						isStreaming: context.isStreaming,
-						isModelLoaded: context.isModelLoaded,
-						modelLoadingProgress: context.modelLoadingProgress,
-						error: context.error,
-					},
-				})
-			}
+		startToolSearch: () => {
+			console.log('Starting tool search...')
 		},
-		assignInput: assign({
-			inputValue: ({ event }) =>
-				event.type === 'SET_INPUT' ? event.value : '',
-		}),
-		assignError: assign({
-			error: ({ event }) => (event as any).error || null,
-			isLoading: false,
-			isStreaming: false,
-			modelLoadingProgress: 0,
-		}),
-		clearChat: assign({
-			messages: [],
-			inputValue: '',
-			isLoading: false,
-			isStreaming: false,
-			streamedContent: '',
-			error: null,
-			messageQueue: [],
-			modelLoadingProgress: 0,
-			usage: null,
-		}),
-		queueMessage: assign({
-			messageQueue: ({ context }) => [
-				...context.messageQueue,
-				context.inputValue,
-			],
-			inputValue: '',
-			error: null,
-		}),
-		processQueue: assign({
-			messages: ({ context }) => [
-				...context.messages,
-				...context.messageQueue.map((content) => ({
-					id: crypto.randomUUID(),
-					role: 'user' as const,
-					content,
-					timestamp: new Date(),
-				})),
-			],
-			messageQueue: [],
-			error: null,
-			streamedContent: '',
-		}),
-		assignEngine: assign({
-			engine: ({ event }) => (event as any).output,
-			isModelLoaded: true,
-			error: null,
-			modelLoadingProgress: 0,
-		}),
-		assignModelLoadingProgress: assign({
-			modelLoadingProgress: ({ event }) => {
-				const progress =
-					event.type === 'MODEL_LOADING_PROGRESS'
-						? Math.round(event.progress.progress * 100)
-						: 0
-				return progress
-			},
-		}),
-		assignUserMessage: assign({
-			messages: ({ context }) => [
-				...context.messages,
-				{
-					id: crypto.randomUUID(),
-					role: 'user',
-					content: context.inputValue,
-					timestamp: new Date(),
-				} as Message,
-			],
-			inputValue: '',
-			isLoading: true,
-			error: null,
-			streamedContent: '',
-		}),
-		createAssistantMessage: assign({
+		startGenerating: () => {
+			console.log('Starting generation...')
+		},
+		cancelToolSearch: () => {
+			console.log('Cancelling tool search...')
+		},
+		cancelGeneration: () => {
+			console.log('Cancelling generation...')
+		},
+		cancelStream: () => {
+			console.log('Cancelling stream...')
+		},
+		appendToolResponseMessage: assign({
 			messages: ({ context, event }) => {
-				invariant(
-					event.type === 'START_STREAMING',
-					'createAssistantMessage should only be called with START_STREAMING events',
-				)
-				return [
-					...context.messages,
-					{
-						id: event.messageId,
-						role: 'assistant',
-						content: '',
+				if (
+					event.type.startsWith('xstate.done.actor') &&
+					'output' in event &&
+					context.currentToolCall
+				) {
+					const toolMessage: ToolMessage = {
+						id: crypto.randomUUID(),
+						role: 'tool',
+						content: (event as any).output.result,
 						timestamp: new Date(),
-						isStreaming: true,
-					} as Message,
-				]
+						toolCall: {
+							name: context.currentToolCall.name,
+							arguments: context.currentToolCall.arguments,
+							result: (event as any).output.result,
+						},
+					}
+					return [...context.messages, toolMessage]
+				}
+				return context.messages
 			},
-			isStreaming: true,
-			isLoading: false,
-			error: null,
 		}),
-		updateMessage: assign({
-			messages: ({ context, event }) => {
-				if (event.type !== 'UPDATE_MESSAGE') return context.messages
-				return context.messages.map((msg) =>
-					msg.id === event.messageId ? { ...msg, content: event.content } : msg,
-				)
+		appendToolRejectionMessage: assign({
+			messages: ({ context }) => {
+				const rejectionMessage: AssistantMessage = {
+					id: crypto.randomUUID(),
+					role: 'assistant',
+					content: 'Tool call was rejected.',
+					timestamp: new Date(),
+				}
+				return [...context.messages, rejectionMessage]
 			},
+		}),
+		callTool: () => {
+			console.log('Calling tool...')
+		},
+		queueMessage: assign({
+			messageQueue: ({ context, event }) => {
+				invariant(
+					event.type === 'QUEUE_MESSAGE',
+					'Expected QUEUE_MESSAGE event',
+				)
+				return [...context.messageQueue, event.message]
+			},
+		}),
+		processMessageQueue: assign({
+			messages: ({ context }) => {
+				if (context.messageQueue.length === 0) return context.messages
+				return [...context.messages, ...context.messageQueue]
+			},
+			messageQueue: () => [],
+		}),
+		updateModelLoadProgress: assign({
+			modelLoadProgress: ({ event }) => {
+				invariant(
+					event.type === 'MODEL_LOAD_PROGRESS',
+					'Expected MODEL_LOAD_PROGRESS event',
+				)
+				return event.progress
+			},
+		}),
+		setCurrentModel: assign({
+			currentModelId: ({ event }) => {
+				invariant(event.type === 'LOAD_MODEL', 'Expected LOAD_MODEL event')
+				return event.modelId
+			},
+		}),
+		setError: assign({
+			lastError: ({ event }) => {
+				if (event.type === 'MODEL_LOAD_FAILURE') return event.error
+				if (event.type === 'STREAM_ERROR') return event.error
+				return undefined
+			},
+		}),
+		setToolCall: assign({
+			currentToolCall: ({ event }) => {
+				if (event.type.startsWith('xstate.done.actor') && 'output' in event) {
+					return (event as any).output.toolCall
+				}
+				return undefined
+			},
+		}),
+		clearToolCall: assign({
+			currentToolCall: () => undefined,
 		}),
 
-		assignChatError: assign({
-			error: ({ event }) => (event as any).error,
-			isStreaming: false,
-			isLoading: false,
-		}),
-		completeCurrentMessage: assign({
+		appendStreamedMessage: assign({
 			messages: ({ context, event }) => {
-				invariant(
-					event.type === 'CHAT_COMPLETION_RECEIVED',
-					'completeCurrentMessage should only be called with CHAT_COMPLETION_RECEIVED events',
-				)
-				return context.messages.map((msg) =>
-					msg.id === event.messageId ? { ...msg, isStreaming: false } : msg,
-				)
-			},
-			isStreaming: false,
-			isLoading: false,
-		}),
-		startNextChatCompletion: assign({
-			isStreaming: true,
-			isLoading: false,
-			error: null,
-		}),
-		setLoggingEnabled: assign({
-			loggingEnabled: ({ event }) => {
-				invariant(
-					event.type === 'SET_LOGGING_ENABLED',
-					'setLoggingEnabled should only be called with SET_LOGGING_ENABLED events',
-				)
-				return event.enabled
-			},
-		}),
-		assignPendingToolCall: assign({
-			pendingToolCall: ({ event }) => {
-				invariant(
-					event.type === 'TOOL_CALL_RECEIVED',
-					'assignPendingToolCall should only be called with TOOL_CALL_RECEIVED events',
-				)
-				return event.toolCall
-			},
-		}),
-		clearToolState: assign({
-			pendingToolCall: null,
-			toolResult: null,
-		}),
-		assignToolResult: assign({
-			toolResult: ({ event }) => (event as any).output,
-			isLoading: false,
-		}),
-		assignToolError: assign({
-			error: ({ event }) =>
-				(event as any).error?.message || 'Tool execution failed',
-			isLoading: false,
-		}),
-		addToolMessage: assign({
-			messages: ({ context, event }) => {
-				invariant(
-					event.type === 'TOOL_RESULT_RECEIVED',
-					'addToolMessage should only be called with TOOL_RESULT_RECEIVED events',
-				)
-				const toolMessage: Message = {
-					id: crypto.randomUUID(),
-					role: 'tool',
-					content: JSON.stringify(event.result),
-					timestamp: new Date(),
-					toolCall: context.pendingToolCall,
-					toolResult: event.result,
+				// Handle the xstate.done.actor event for streaming actor
+				if (event.type.startsWith('xstate.done.actor') && 'output' in event) {
+					const assistantMessage: AssistantMessage = {
+						id: crypto.randomUUID(),
+						role: 'assistant',
+						content: (event as any).output.content,
+						timestamp: new Date(),
+					}
+					return [...context.messages, assistantMessage]
 				}
-				return [...context.messages, toolMessage]
+				return context.messages
 			},
-			pendingToolCall: null,
+			streamedContent: () => '',
 		}),
-		handleToolCompletion: assign({
-			messages: ({ context, event }) => {
-				const toolMessage: Message = {
-					id: crypto.randomUUID(),
-					role: 'tool',
-					content: JSON.stringify((event as any).output),
-					timestamp: new Date(),
-					toolCall: context.pendingToolCall,
-					toolResult: (event as any).output,
-				}
-				return [...context.messages, toolMessage]
-			},
-			toolResult: ({ event }) => (event as any).output,
-			pendingToolCall: null,
-		}),
-		continueAfterTool: assign({
-			isLoading: true,
-			isStreaming: true,
+		clearError: assign({
+			lastError: () => undefined,
 		}),
 	},
 	guards: {
-		isModelLoaded: ({ context }) =>
-			context.isModelLoaded && context.engine !== null,
-		hasInput: ({ context }) => context.inputValue.trim().length > 0,
+		hasQueuedMessages: ({ context }) => context.messageQueue.length > 0,
+		hasToolCall: ({ event }) => {
+			// XState v5 uses 'xstate.done.actor' format instead of 'done.invoke'
+			if (event.type.startsWith('xstate.done.actor') && 'output' in event) {
+				return !!(event as any).output.toolCall
+			}
+			return false
+		},
+	},
+	actors: {
+		toolSearch: fromPromise(async () => {
+			throw new Error('toolSearch actor not implemented')
+		}),
+		generation: fromPromise(async () => {
+			throw new Error('generation actor not implemented')
+		}),
+		streaming: fromPromise(async () => {
+			throw new Error('streaming actor not implemented')
+		}),
+		toolCall: fromPromise(async ({ input }: { input: ToolCall }) => {
+			throw new Error('toolCall actor not implemented')
+		}),
 	},
 }).createMachine({
-	id: 'chatMachine',
+	id: 'chat',
 	initial: 'idle',
-	context: {
-		// UI State
-		messages: [],
-		inputValue: '',
-		isLoading: false,
-		isStreaming: false,
-		streamedContent: '',
-		error: null,
+	context: ({ input }) => ({
+		messages: input?.initialMessages || [],
 		messageQueue: [],
-
-		// LLM State
-		engine: null,
-		modelId: null,
-		isModelLoaded: false,
-		modelLoadingProgress: 0,
-		usage: null,
-
-		// Tool State
-		pendingToolCall: null,
-		toolResult: null,
-
-		// Configuration
-		loggingEnabled: true,
-	},
+		currentModelId: undefined,
+		modelLoadProgress: 0,
+		lastError: undefined,
+		currentToolCall: undefined,
+		streamedContent: '',
+	}),
 	states: {
 		idle: {
-			id: 'idle',
 			on: {
 				LOAD_MODEL: {
 					target: 'loadingModel',
-					actions: [
-						'logTransition',
-						assign({
-							modelId: ({ event }) => (event as any).modelId,
-							error: null,
-						}),
-					],
+					actions: ['setCurrentModel'],
 				},
-				SET_INPUT: {
-					actions: ['assignInput'],
-				},
-				SEND_MESSAGE: [
-					{
-						guard: 'isModelLoaded',
-						target: 'streaming',
-						actions: ['logTransition', 'assignUserMessage'],
-					},
-					{
-						guard: 'hasInput',
-						actions: ['logTransition', 'queueMessage'],
-					},
-				],
-				CLEAR_CHAT: {
-					actions: ['clearChat'],
-				},
-				SET_LOGGING_ENABLED: {
-					actions: ['setLoggingEnabled'],
-				},
-				TOOL_CALL_RECEIVED: [
-					{
-						guard: ({ event }) => event.toolCall !== null,
-						target: 'toolCall',
-						actions: ['assignPendingToolCall'],
-					},
-					{
-						actions: ({ event }) => {
-							console.log('No tool call found in response')
-						},
-					},
-				],
-				TOOL_RESULT_RECEIVED: {
-					actions: ['logTransition', 'addToolMessage'],
+				QUEUE_MESSAGE: {
+					actions: ['queueMessage'],
 				},
 			},
 		},
 		loadingModel: {
-			entry: assign({
-				modelLoadingProgress: 0,
-				error: null,
-			}),
-			invoke: {
-				src: 'createEngine',
-				input: ({ event }) => {
-					invariant(
-						event.type === 'LOAD_MODEL',
-						'Invalid event. createEngine should only be invoked with LOAD_MODEL events',
-					)
-
-					return {
-						modelId: event.modelId,
-						engineConfig: event.engineConfig,
-						chatOpts: event.chatOpts,
-					}
-				},
-				onDone: [
-					{
-						guard: ({ context }) => context.messageQueue.length > 0,
-						target: 'streaming',
-						actions: ['logTransition', 'assignEngine', 'processQueue'],
-					},
-					{
-						target: 'idle',
-						actions: ['logTransition', 'assignEngine'],
-					},
-				],
-				onError: {
-					target: 'error',
-					actions: assign({
-						error: ({ event }) =>
-							(event as any).error?.message || 'Failed to load model',
-					}),
-				},
-			},
 			on: {
-				SET_INPUT: {
-					actions: ['assignInput'],
+				MODEL_LOAD_PROGRESS: {
+					actions: ['updateModelLoadProgress'],
 				},
-				SEND_MESSAGE: [
-					{
-						guard: 'hasInput',
-						actions: ['logTransition', 'queueMessage'],
-					},
-				],
-				MODEL_LOADING_PROGRESS: {
-					actions: 'assignModelLoadingProgress',
+				MODEL_LOAD_SUCCESS: {
+					target: 'ready',
 				},
-				SET_LOGGING_ENABLED: {
-					actions: ['setLoggingEnabled'],
+				MODEL_LOAD_FAILURE: {
+					target: 'loadFailed',
+					actions: ['setError'],
 				},
-				TOOL_CALL_RECEIVED: [
-					{
-						guard: ({ event }) => event.toolCall !== null,
-						target: 'toolCall',
-						actions: ['assignPendingToolCall'],
-					},
-					{
-						actions: ({ event }) => {
-							console.log('No tool call found in response')
-						},
-					},
-				],
-				TOOL_RESULT_RECEIVED: {
-					actions: ['logTransition', 'addToolMessage'],
+				QUEUE_MESSAGE: {
+					actions: ['queueMessage'],
 				},
 			},
 		},
-		streaming: {
-			id: 'streaming',
-			invoke: {
-				src: 'chatCompletion',
-				input: ({ context }) => ({
-					engine: context.engine!,
-					options: {
-						temperature: 0.7,
-						stream: true,
-						messages: context.messages.map((msg) => ({
-							role: msg.role,
-							content: msg.content,
-						})),
-					} as ChatCompletionRequestStreaming,
-				}),
-				onDone: {
-					target: 'idle',
-				},
-				onError: {
-					target: 'error',
-					actions: 'assignChatError',
-				},
-			},
+		loadFailed: {
 			on: {
-				SET_INPUT: {
-					actions: ['assignInput'],
+				LOAD_MODEL: {
+					target: 'loadingModel',
+					actions: ['setCurrentModel', 'clearError'],
 				},
-				SEND_MESSAGE: [
-					{
-						guard: 'hasInput',
-						target: 'interrupting',
-						actions: ['logTransition', 'queueMessage'],
-					},
-				],
-				START_STREAMING: {
-					actions: ['logTransition', 'createAssistantMessage'],
-				},
-				STREAM_CHUNK: {
-					actions: ({ context, event, self }) => {
-						invariant(
-							event.type === 'STREAM_CHUNK',
-							'Invalid event. chatCompletion should only be invoked with STREAM_CHUNK events',
-						)
-
-						// Update the streaming message with the full appended content
-						const currentMessage = context.messages.find(
-							(msg) => msg.id === event.messageId,
-						)
-						const currentContent = currentMessage?.content || ''
-						const fullContent = currentContent + event.content
-
-						self.send({
-							type: 'UPDATE_MESSAGE',
-							messageId: event.messageId,
-							content: fullContent,
-						})
-					},
-				},
-				UPDATE_MESSAGE: {
-					actions: ['logTransition', 'updateMessage'],
-				},
-				SET_LOGGING_ENABLED: {
-					actions: ['setLoggingEnabled'],
-				},
-				TOOL_RESULT_RECEIVED: {
-					actions: ['logTransition', 'addToolMessage'],
-				},
-				CHAT_COMPLETION_RECEIVED: [
-					{
-						guard: ({ context }) => context.messageQueue.length > 0,
-						target: 'processingQueue',
-						actions: [
-							'logTransition',
-							'completeCurrentMessage',
-							'processQueue',
-						],
-					},
-					{
-						target: 'idle',
-						actions: ['logTransition', 'completeCurrentMessage'],
-					},
-				],
-				CHAT_ERROR: [
-					{
-						guard: ({ context }) => context.messageQueue.length > 0,
-						target: 'processingQueue',
-						actions: ['logTransition', 'processQueue'],
-					},
-					{
-						target: 'error',
-						actions: ['logTransition'],
-					},
-				],
 			},
 		},
-		interrupting: {
-			id: 'interrupting',
-			entry: assign({
-				isStreaming: false,
-				isLoading: false,
-			}),
-			always: {
-				target: 'streaming',
-				actions: ['startNextChatCompletion'],
-			},
-		},
-		processingQueue: {
-			id: 'processingQueue',
-			entry: ['startNextChatCompletion'],
-			always: {
-				target: 'streaming',
-			},
-		},
-		toolCall: {
-			initial: 'waitingForApproval',
-			entry: assign({
-				isLoading: false,
-				error: null,
-			}),
+		ready: {
+			entry: ['processMessageQueue'],
+			always: [
+				{
+					guard: 'hasQueuedMessages',
+					target: 'searchingTools',
+				},
+			],
 			on: {
-				REJECT_TOOL_EXECUTION: {
-					target: 'idle',
-					actions: ['clearToolState'],
-				},
-				SEND_MESSAGE: [
-					{
-						guard: 'hasInput',
-						target: 'streaming',
-						actions: ['logTransition', 'clearToolState', 'assignUserMessage'],
-					},
-				],
-				SET_INPUT: {
-					actions: ['assignInput'],
-				},
-				SET_LOGGING_ENABLED: {
-					actions: ['setLoggingEnabled'],
-				},
-			},
-			states: {
-				waitingForApproval: {
-					on: {
-						APPROVE_TOOL_EXECUTION: {
-							target: 'executing',
-							actions: assign({
-								isLoading: true,
-							}),
-						},
-						SEND_MESSAGE: [
-							{
-								guard: 'hasInput',
-								target: '#streaming',
-								actions: [
-									'logTransition',
-									'clearToolState',
-									'assignUserMessage',
-								],
-							},
-						],
-						SET_INPUT: {
-							actions: ['assignInput'],
-						},
-						SET_LOGGING_ENABLED: {
-							actions: ['setLoggingEnabled'],
-						},
-					},
-				},
-				executing: {
-					invoke: {
-						src: 'toolInvocation',
-						input: ({ context }) => ({
-							toolCall: context.pendingToolCall!,
-						}),
-						onDone: [
-							{
-								guard: ({ context }) => context.messageQueue.length > 0,
-								target: '#processingQueue',
-								actions: ['handleToolCompletion'],
-							},
-							{
-								target: '#streaming',
-								actions: ['handleToolCompletion', 'startNextChatCompletion'],
-							},
-						],
-						onError: {
-							target: '#error',
-							actions: ['assignToolError'],
-						},
-					},
-					on: {
-						SEND_MESSAGE: [
-							{
-								guard: 'hasInput',
-								target: '#streaming',
-								actions: [
-									'logTransition',
-									'clearToolState',
-									'assignUserMessage',
-								],
-							},
-						],
-						SET_INPUT: {
-							actions: ['assignInput'],
-						},
-						SET_LOGGING_ENABLED: {
-							actions: ['setLoggingEnabled'],
-						},
-					},
-				},
-			},
-		},
-		error: {
-			id: 'error',
-			on: {
-				SET_INPUT: {
-					actions: ['assignInput'],
-				},
-				CLEAR_CHAT: {
-					target: 'idle',
-					actions: ['logTransition', 'clearChat'],
+				QUEUE_MESSAGE: {
+					actions: ['queueMessage', 'processMessageQueue'],
+					target: 'searchingTools',
 				},
 				LOAD_MODEL: {
 					target: 'loadingModel',
-					actions: [
-						'logTransition',
-						assign({
-							modelId: ({ event }) => {
-								invariant(
-									event.type === 'LOAD_MODEL',
-									'Invalid event. This should only be invoked with LOAD_MODEL events',
-								)
-
-								return event.modelId
-							},
-							error: null,
-						}),
-					],
+					actions: ['setCurrentModel'],
 				},
-				SET_LOGGING_ENABLED: {
-					actions: ['setLoggingEnabled'],
+			},
+		},
+		searchingTools: {
+			entry: ['startToolSearch'],
+			invoke: {
+				src: 'toolSearch',
+				onDone: {
+					target: 'generatingResponse',
 				},
-				TOOL_CALL_RECEIVED: [
+				onError: {
+					target: 'ready',
+				},
+			},
+			on: {
+				INTERRUPT: {
+					target: 'ready',
+					actions: ['cancelToolSearch'],
+				},
+				QUEUE_MESSAGE: {
+					actions: ['queueMessage'],
+				},
+			},
+		},
+		generatingResponse: {
+			entry: ['startGenerating'],
+			invoke: {
+				src: 'generation',
+				onDone: {
+					target: 'streamingResponse',
+					actions: ['setToolCall'],
+				},
+				onError: {
+					target: 'ready',
+				},
+			},
+			on: {
+				INTERRUPT: {
+					target: 'ready',
+					actions: ['cancelGeneration'],
+				},
+				QUEUE_MESSAGE: {
+					actions: ['queueMessage'],
+				},
+			},
+		},
+		streamingResponse: {
+			invoke: {
+				src: 'streaming',
+				onDone: [
 					{
-						guard: ({ event }) => event.toolCall !== null,
-						target: 'toolCall',
-						actions: ['assignPendingToolCall'],
+						guard: 'hasToolCall',
+						target: 'waitingForToolApproval',
+						actions: ['appendStreamedMessage', 'setToolCall'],
 					},
 					{
-						actions: ({ event }) => {
-							console.log('No tool call found in response')
-						},
+						target: 'ready',
+						actions: ['appendStreamedMessage'],
 					},
 				],
-				TOOL_RESULT_RECEIVED: {
-					actions: ['logTransition', 'addToolMessage'],
+				onError: {
+					target: 'ready',
+				},
+			},
+			on: {
+				STREAM_ERROR: {
+					target: 'ready',
+					actions: ['setError', 'cancelStream'],
+				},
+				INTERRUPT: {
+					target: 'ready',
+					actions: ['cancelStream'],
+				},
+				QUEUE_MESSAGE: {
+					actions: ['queueMessage'],
+				},
+			},
+		},
+		waitingForToolApproval: {
+			on: {
+				APPROVE_TOOL_CALL: {
+					target: 'callingTool',
+				},
+				REJECT_TOOL_CALL: {
+					target: 'searchingTools',
+					actions: ['appendToolRejectionMessage', 'clearToolCall'],
+				},
+				INTERRUPT: {
+					target: 'searchingTools',
+					actions: ['appendToolRejectionMessage', 'clearToolCall'],
+				},
+			},
+		},
+		callingTool: {
+			entry: ['callTool'],
+			invoke: {
+				src: 'toolCall',
+				input: ({ context }) => context.currentToolCall!,
+				onDone: {
+					target: 'searchingTools',
+					actions: ['appendToolResponseMessage', 'clearToolCall'],
+				},
+				onError: {
+					target: 'ready',
+					actions: ['clearToolCall'],
+				},
+			},
+			on: {
+				INTERRUPT: {
+					target: 'searchingTools',
+					actions: ['appendToolRejectionMessage', 'clearToolCall'],
 				},
 			},
 		},
 	},
 })
-
-// Export types for external use
-export type { ChatContext, ChatEvents, Message }
