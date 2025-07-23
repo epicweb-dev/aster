@@ -28,5 +28,7 @@ export default defineConfig({
 	test: {
 		restoreMocks: true,
 		reporters: ['default', 'hanging-process'],
+		teardownTimeout: 5000,
+		hookTimeout: 5000,
 	},
 })

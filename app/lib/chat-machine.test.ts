@@ -1,6 +1,6 @@
-import { test, expect, vi, afterEach } from 'vitest'
+import { test, expect, vi } from 'vitest'
 import { chatMachine } from './chat-machine'
-import { createActor, fromPromise, Actor, type AnyStateMachine } from 'xstate'
+import { createActor, fromPromise, type AnyStateMachine } from 'xstate'
 
 vi.mock('./search-engine', () => ({
 	search: vi.fn(),
@@ -75,6 +75,7 @@ function createDeferred<T>() {
 		}
 	})
 	deferred.promise = promise as Promise<T>
+
 	return deferred
 }
 
