@@ -345,23 +345,7 @@ export const chatMachine = setup({
 			}) => {
 				const performStreaming = async () => {
 					try {
-						// If no engine, use mock implementation
-						if (!input.engine) {
-							// Mock implementation for tests
-							await new Promise((resolve) => setTimeout(resolve, 150))
-							sendBack({
-								type: 'xstate.done.actor',
-								output: {
-									content:
-										'Hello! I can help you with that. Let me search for the information you need.',
-									toolCall: {
-										name: 'search',
-										arguments: { query: 'user query' },
-									},
-								},
-							})
-							return
-						}
+						invariant(input.engine, 'Engine is required')
 
 						// Real LLM implementation
 						const toolBoundaryId = crypto.randomUUID()

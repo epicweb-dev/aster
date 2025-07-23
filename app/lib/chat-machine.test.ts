@@ -1,9 +1,9 @@
 import { expect, test } from 'vitest'
 import { consoleError } from '#tests/test-setup'
 import { Actor, createActor, fromPromise } from 'xstate'
-import { chatMachine } from './chat-machine'
+import { chatMachine, type ToolDescriptor } from './chat-machine'
 import { waitFor, createDeferred } from '#tests/utils'
-import type { MLCEngine } from '@mlc-ai/web-llm'
+import type { ChatCompletionMessageParam, MLCEngine } from '@mlc-ai/web-llm'
 
 type ChatActorOptions = Parameters<typeof createActor<typeof chatMachine>>[1]
 type ChatMachineActors = Parameters<
@@ -25,6 +25,23 @@ function setupActor({
 					// TODO: mock MLCEngine
 				} as MLCEngine
 			}),
+			toolSearcher: fromPromise<
+				{ tools: Array<ToolDescriptor> },
+				{ messages: Array<ChatCompletionMessageParam> }
+			>(async () => {
+				return {
+					tools: [],
+				}
+			}),
+			generator: fromPromise<
+				void,
+				{
+					toolBoundaryId: string
+					engine: MLCEngine
+					messages: Array<ChatCompletionMessageParam>
+					tools: Array<ToolDescriptor>
+				}
+			>(async () => {}),
 			...actors,
 		},
 	})
@@ -125,7 +142,7 @@ test('model load failure', async () => {
 	})
 })
 
-test('queues messages while waiting for model and moves them to messages once model has loaded and moves to generating state', async () => {
+test('queues messages while waiting for model and immediately generates when model is ready', async () => {
 	using setup = setupActor()
 	const { actor } = setup
 	actor.send({ type: 'LOAD_MODEL', modelId: 'test-model' })
@@ -133,17 +150,10 @@ test('queues messages while waiting for model and moves them to messages once mo
 
 	const content1 = 'test-message'
 	const content2 = 'test-message-2'
-	actor.send({
-		type: 'ADD_MESSAGE',
-		content: content1,
-	})
+	actor.send({ type: 'ADD_MESSAGE', content: content1 })
+	actor.send({ type: 'ADD_MESSAGE', content: content2 })
 
-	actor.send({
-		type: 'ADD_MESSAGE',
-		content: content2,
-	})
-
-	expect(actor.getSnapshot().context.queuedMessages).toStrictEqual([
+	const messagesMatch = [
 		{
 			id: expect.any(String),
 			content: content1,
@@ -156,34 +166,24 @@ test('queues messages while waiting for model and moves them to messages once mo
 			timestamp: expect.any(Date),
 			role: 'user',
 		},
-	])
+	]
+	expect(actor.getSnapshot().context.queuedMessages).toStrictEqual(
+		messagesMatch,
+	)
 	expect(actor.getSnapshot().context.messages).toStrictEqual([])
 
 	expect(actor.getSnapshot().value).toBe('loadingModel')
 
-	await waitFor(() => expect(actor.getSnapshot().value).toBe('generating'))
+	await waitFor(() => expect(actor.getSnapshot().value).toBe('ready'))
 
 	expect(actor.getSnapshot().context.queuedMessages).toStrictEqual([])
 	expect(actor.getSnapshot().context.messages).toStrictEqual([
+		...messagesMatch,
 		{
 			id: expect.any(String),
-			content: content1,
+			content: '',
 			timestamp: expect.any(Date),
-			role: 'user',
-		},
-		{
-			id: expect.any(String),
-			content: content2,
-			timestamp: expect.any(Date),
-			role: 'user',
+			role: 'assistant',
 		},
 	])
 })
-
-// search-flow.test.ts
-
-// 'processes a queued message and transitions from ready → searchingTools → ready on failure'
-
-// 'processes a queued message and transitions from ready → searchingTools → generatingResponse on success'
-
-// 'cancels tool search with INTERRUPT and restarts on retry'

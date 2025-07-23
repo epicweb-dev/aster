@@ -70,7 +70,7 @@ For each relevant tool, provide:
 3. Brief reasoning for why this tool is relevant
 
 Format your response as a JSON array of objects with these fields:
-- tool_name: string
+- tool_id: string
 - relevance_score: number (0.0 to 1.0)
 - reasoning: string
 
@@ -78,14 +78,14 @@ Only include tools with relevance scores >= 0.7.
 Return at most 5 tools, sorted by relevance score (highest first).
 
 Here is an example of a response:
-[{"tool_name":"alert","relevance_score":1.0,"reasoning":"The user is asking to display an alert message."}]
+[{"tool_id":"alert","relevance_score":1.0,"reasoning":"The user is asking to display an alert message."}]
 
 If no tools are relevant, return an empty array:
 []
 
 Do not include any other text in your response.`
 
-		console.log('performing search with the following prompt', searchPrompt)
+		console.log('performing search with the following prompt: \n', searchPrompt)
 		// Send the search prompt to the LLM
 		const response = await llmEngine.chat.completions.create({
 			messages: [{ role: 'user', content: searchPrompt }],
@@ -93,7 +93,7 @@ Do not include any other text in your response.`
 			max_tokens: 1000,
 			stream: false,
 		})
-		console.log('search performed, got the following response', response)
+		console.log('search performed, got the following response: \n', response)
 
 		const responseContent = response.choices[0]?.message?.content
 		if (!responseContent) {
@@ -104,7 +104,7 @@ Do not include any other text in your response.`
 		// Parse the JSON response
 		try {
 			const results = JSON.parse(responseContent) as Array<{
-				tool_name: string
+				tool_id: string
 				relevance_score: number
 				reasoning: string
 			}>
@@ -118,6 +118,7 @@ Do not include any other text in your response.`
 			// Convert tool names to ChatCompletionTool objects
 			const recommendedTools: Array<
 				ChatCompletionTool & {
+					id: string
 					relevanceScore: number
 					llmDescription: string
 				}
@@ -125,17 +126,14 @@ Do not include any other text in your response.`
 
 			for (const result of relevantTools) {
 				// First try to find in the new tool registry
-				const registryTool = await getTool(result.tool_name)
+				const registryTool = await getTool(result.tool_id)
 				if (registryTool) {
 					recommendedTools.push({
+						id: result.tool_id,
 						type: 'function',
 						relevanceScore: result.relevance_score,
-						llmDescription: `<tool><name>${registryTool.function.name}</name><description>${registryTool.function.description}</description><parameters>${JSON.stringify(registryTool.function.parameters)}</parameters></tool>`,
-						function: {
-							name: registryTool.function.name,
-							description: registryTool.function.description,
-							parameters: registryTool.function.parameters,
-						},
+						llmDescription: `<tool><id>${result.tool_id}</id><relevance_score>${result.relevance_score}</relevance_score><name>${registryTool.function.name}</name><description>${registryTool.function.description}</description><parameters>${JSON.stringify(registryTool.function.parameters)}</parameters></tool>`,
+						function: registryTool.function,
 					})
 				}
 			}

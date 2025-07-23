@@ -1,7 +1,14 @@
 import { invariant } from '@epic-web/invariant'
-import type { ChatOptions, MLCEngine, MLCEngineConfig } from '@mlc-ai/web-llm'
-import { assign, fromPromise, setup } from 'xstate'
-import { getErrorMessage } from './utils.js'
+import type {
+	ChatCompletionAssistantMessageParam,
+	ChatCompletionMessageParam,
+	ChatOptions,
+	MLCEngine,
+	MLCEngineConfig,
+} from '@mlc-ai/web-llm'
+import { assign, createActor, fromPromise, setup, type ActorRef } from 'xstate'
+import { getErrorMessage, parseToolCall } from './utils.js'
+import { search } from './search-engine.js'
 
 /*
 CURRENT TEST:
@@ -56,6 +63,7 @@ export type SystemMessage = BaseMessage & { role: 'system' }
 export type ToolMessage = BaseMessage & {
 	role: 'tool'
 	toolCall: {
+		id: string
 		name: string
 		arguments: Record<string, any>
 		result?: string
@@ -67,6 +75,11 @@ export type Message =
 	| AssistantMessage
 	| SystemMessage
 	| ToolMessage
+
+export type ToolCall = {
+	name: string
+	arguments: Record<string, any>
+}
 
 export type ChatContext = {
 	logLevel: 'silent' | 'debug' | 'info' | 'warn' | 'error'
@@ -83,6 +96,9 @@ export type ChatContext = {
 	messages: Array<Message>
 	queuedMessages: Array<Message>
 	engine?: MLCEngine
+	toolDescriptors: Array<ToolDescriptor>
+	assistantMessageId?: string
+	toolBoundaryId?: string
 }
 
 export type ChatEvent =
@@ -103,6 +119,10 @@ export type ChatEvent =
 	| {
 			type: 'START_GENERATION'
 	  }
+	| {
+			type: 'STREAM_CHUNK'
+			chunk: string
+	  }
 
 const logLevels = {
 	debug: 0,
@@ -115,8 +135,9 @@ const logLevels = {
 const eventLogLevels = {
 	LOAD_MODEL: 'info',
 	MODEL_LOAD_PROGRESS: 'debug',
-	ADD_MESSAGE: 'debug',
-	START_GENERATION: 'debug',
+	ADD_MESSAGE: 'info',
+	START_GENERATION: 'info',
+	STREAM_CHUNK: 'debug',
 } satisfies Record<ChatEvent['type'], ChatContext['logLevel']>
 
 const modelLoaderActor = fromPromise<
@@ -129,6 +150,7 @@ const modelLoaderActor = fromPromise<
 		// Create engine with progress callback
 		const enginePromise = CreateMLCEngine(input.modelId, {
 			initProgressCallback: (progress) => {
+				debugger
 				self.send({
 					type: 'MODEL_LOAD_PROGRESS',
 					progress: progress.progress,
@@ -154,10 +176,79 @@ const modelLoaderActor = fromPromise<
 	}
 })
 
-const generatorActor = fromPromise(async (context) => {
+export type ToolDescriptor = {
+	id: string
+	llmDescription: string
+}
+
+const toolSearcherActor = fromPromise<
+	{ tools: Array<ToolDescriptor> },
+	{ messages: Array<ChatCompletionMessageParam> }
+>(async ({ input }) => {
+	const searchResults = await search(
+		removeMessagesAfterLastUserOrToolMessage(input.messages),
+	)
 	return {
-		type: 'GENERATE_FINISHED',
-		content: 'test-content',
+		tools: searchResults.map((tool) => ({
+			id: tool.id,
+			llmDescription: tool.llmDescription,
+		})),
+	}
+})
+
+const generatorActor = fromPromise<
+	void,
+	{
+		toolBoundaryId: string
+		engine: MLCEngine
+		messages: Array<ChatCompletionMessageParam>
+		tools: Array<ToolDescriptor>
+	}
+>(async ({ input, self }) => {
+	const messages: Array<ChatCompletionMessageParam> = []
+
+	// Add system message with tool instructions if tools are available
+	if (input.tools && input.tools.length > 0) {
+		messages.push({
+			role: 'system',
+			content: `You are a helpful assistant that can use tools to help the user. Below is a list of tools available:
+
+${input.tools.map((tool: any) => tool.llmDescription).join('\n')}
+
+To call a tool, use this exact format:
+[TOOL_CALL:${input.toolBoundaryId}]
+{"name": "tool_name", "arguments": {"arg1": "value1"}}
+[/TOOL_CALL:${input.toolBoundaryId}]
+
+Only call tools when necessary to help the user.`,
+		})
+	} else {
+		messages.push({
+			role: 'system',
+			content:
+				'You are a helpful AI assistant. Be concise and friendly in your responses.',
+		})
+	}
+
+	messages.push(...removeMessagesAfterLastUserOrToolMessage(input.messages))
+
+	// Create streaming chat completion
+	console.log('starting completion for messages', messages)
+	debugger
+	const stream = await input.engine.chat.completions.create({
+		messages,
+		stream: true,
+		temperature: 0.7,
+		max_tokens: 1000,
+	})
+	console.log('got stream')
+	debugger
+
+	for await (const chunk of stream) {
+		const content = chunk.choices[0]?.delta?.content || ''
+		if (content) {
+			self.send({ type: 'STREAM_CHUNK', chunk: content })
+		}
 	}
 })
 
@@ -169,6 +260,7 @@ export const chatMachine = setup({
 	},
 	actors: {
 		modelLoader: modelLoaderActor,
+		toolSearcher: toolSearcherActor,
 		generator: generatorActor,
 	},
 	guards: {
@@ -188,47 +280,23 @@ export const chatMachine = setup({
 				})
 			}
 		},
-		resetModelLoadProgress: assign({
-			modelLoadProgress: () => ({ status: 'idle', value: 0 }) as const,
-		}),
-		setCurrentModelId: assign({
-			currentModelId: ({ event }) => {
-				invariantEvent(event, 'LOAD_MODEL')
-				return event.modelId
-			},
-		}),
-		setModelLoadProgress: assign({
-			modelLoadProgress: ({ event }) => {
-				invariantEvent(event, 'MODEL_LOAD_PROGRESS')
-				return event.progress !== 1
-					? ({ status: 'pending', value: event.progress } as const)
-					: ({ status: 'success', value: event.progress } as const)
-			},
-		}),
 		processQueuedMessages: ({ context, self }) => {
-			if (context.queuedMessages.length === 0) {
-				return
-			}
-			// move queued messages to messages
+			if (context.queuedMessages.length === 0) return
+
 			context.messages = [...context.messages, ...context.queuedMessages]
 			context.queuedMessages = []
-			// start generating
+
 			self.send({ type: 'START_GENERATION' })
 		},
-		addMessageToQueue: assign({
-			queuedMessages: ({ event, context }) => {
-				invariantEvent(event, 'ADD_MESSAGE')
-				return [
-					...context.queuedMessages,
-					{
-						id: crypto.randomUUID(),
-						content: event.content,
-						timestamp: new Date(),
-						role: 'user',
-					} as const,
-				]
-			},
-		}),
+		addMessageToQueue: ({ event, context }) => {
+			invariantEvent(event, 'ADD_MESSAGE')
+			context.queuedMessages.push({
+				id: crypto.randomUUID(),
+				content: event.content,
+				timestamp: new Date(),
+				role: 'user',
+			})
+		},
 	},
 }).createMachine({
 	id: 'chat',
@@ -242,6 +310,7 @@ export const chatMachine = setup({
 		},
 		messages: [],
 		queuedMessages: [],
+		toolDescriptors: [],
 	}),
 	always: {
 		actions: ['logAllEvents'],
@@ -256,12 +325,16 @@ export const chatMachine = setup({
 			on: {
 				LOAD_MODEL: {
 					target: 'loadingModel',
-					actions: ['setCurrentModelId'],
+					actions: [assign({ currentModelId: ({ event }) => event.modelId })],
 				},
 			},
 		},
 		loadingModel: {
-			entry: ['resetModelLoadProgress'],
+			entry: [
+				assign({
+					modelLoadProgress: () => ({ status: 'idle', value: 0 }) as const,
+				}),
+			],
 			invoke: {
 				src: 'modelLoader',
 				input: ({ event }) => {
@@ -304,7 +377,17 @@ export const chatMachine = setup({
 			},
 			on: {
 				MODEL_LOAD_PROGRESS: {
-					actions: ['setModelLoadProgress'],
+					actions: [
+						assign({
+							modelLoadProgress: ({ event }) => {
+								debugger
+								return {
+									status: 'pending',
+									value: event.progress,
+								}
+							},
+						}),
+					],
 				},
 			},
 		},
@@ -312,7 +395,7 @@ export const chatMachine = setup({
 			entry: ['processQueuedMessages'],
 			on: {
 				ADD_MESSAGE: {
-					actions: ['processQueuedMessages'],
+					actions: ['addMessageToQueue', 'processQueuedMessages'],
 				},
 				START_GENERATION: {
 					target: 'generating',
@@ -320,15 +403,74 @@ export const chatMachine = setup({
 			},
 		},
 		generating: {
-			invoke: {
-				src: 'generator',
-				input: ({ context }) => ({
-					engine: context.engine,
-					messages: context.messages,
-				}),
-				events: {
-					GENERATE_FINISHED: {
-						target: 'ready',
+			initial: 'searchingTools',
+			entry: [
+				({ context }) => {
+					const id = crypto.randomUUID()
+					context.toolBoundaryId = crypto.randomUUID()
+					context.assistantMessageId = id
+					context.messages.push({
+						id,
+						role: 'assistant',
+						content: '',
+						timestamp: new Date(),
+					})
+				},
+			],
+			states: {
+				searchingTools: {
+					invoke: {
+						src: 'toolSearcher',
+						input: ({ context }) => ({
+							messages: convertMessages(context.messages),
+						}),
+						onDone: {
+							target: 'generatingResponse',
+							actions: assign({
+								toolDescriptors: ({ event }) => event.output.tools,
+							}),
+						},
+					},
+				},
+				generatingResponse: {
+					invoke: {
+						src: 'generator',
+						input: ({ context }) => {
+							invariant(
+								context.engine,
+								'Cannot generate response. Engine not found.',
+							)
+							invariant(
+								context.toolBoundaryId,
+								'Cannot generate response. Tool boundary ID not found.',
+							)
+
+							return {
+								toolBoundaryId: context.toolBoundaryId,
+								engine: context.engine,
+								messages: convertMessages(context.messages),
+								tools: context.toolDescriptors,
+							}
+						},
+						onDone: {
+							target: '..ready',
+						},
+					},
+					on: {
+						STREAM_CHUNK: {
+							actions: assign({
+								messages: ({ event, context }) => {
+									const assistantMessage = context.messages.find(
+										(msg) => msg.id === context.assistantMessageId,
+									)
+									if (!assistantMessage) {
+										throw new Error('Assistant message not found')
+									}
+									assistantMessage.content += event.chunk
+									return context.messages
+								},
+							}),
+						},
 					},
 				},
 			},
@@ -336,6 +478,40 @@ export const chatMachine = setup({
 		},
 	},
 })
+
+function convertMessages(
+	messages: Array<Message>,
+): Array<ChatCompletionMessageParam> {
+	return messages.map((msg) =>
+		msg.role === 'tool'
+			? {
+					role: 'tool',
+					content: msg.content,
+					tool_call_id: msg.toolCall?.id,
+				}
+			: {
+					role: msg.role,
+					content: msg.content,
+				},
+	)
+}
+
+// Completion won't work if the last message is an assistant message
+// and we add the assistant message to the array before starting the completion
+// so we'll remove that here.
+
+// find the last user/tool message, include everything up to that (including that message)
+function removeMessagesAfterLastUserOrToolMessage<
+	MessageType extends { role: string },
+>(messages: Array<MessageType>) {
+	const lastUserOrToolMessage = messages.findLastIndex((msg) =>
+		['user', 'tool'].includes(msg.role),
+	)
+	if (lastUserOrToolMessage === -1) {
+		return messages
+	}
+	return messages.slice(0, lastUserOrToolMessage + 1)
+}
 
 function invariantEvent<T extends ChatEvent['type']>(
 	event: ChatEvent,

@@ -3,6 +3,7 @@ import { type ChatCompletionTool } from '@mlc-ai/web-llm'
 type ToolCallback = (args: Record<string, any>) => Promise<any>
 
 type ToolDefinition = {
+	id: string
 	config: ChatCompletionTool
 	callback: ToolCallback
 }
@@ -10,11 +11,12 @@ type ToolDefinition = {
 const tools = new Map<string, ToolDefinition>()
 
 function defineTool(
-	name: string,
+	id: string,
 	config: Omit<ChatCompletionTool, 'type'>,
 	callback: ToolCallback,
 ): void {
-	tools.set(name, {
+	tools.set(id, {
+		id,
 		config: { type: 'function', ...config },
 		callback,
 	})
@@ -498,6 +500,6 @@ defineTool(
 	},
 )
 
-export async function getTool(name: string) {
-	return tools.get(name)?.config
+export async function getTool(id: string) {
+	return tools.get(id)?.config
 }
