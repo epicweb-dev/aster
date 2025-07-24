@@ -24,23 +24,6 @@ export default function ChatNew() {
 		loadModel('Llama-3.1-8B-Instruct-q4f32_1-MLC')
 	}, [loadModel])
 
-	// Focus input after hydration and when status changes
-	useEffect(() => {
-		if (inputRef.current && state.status !== 'idle') {
-			inputRef.current.focus()
-		}
-	}, [state.status])
-
-	// Focus input on mount (after hydration)
-	useEffect(() => {
-		const timer = setTimeout(() => {
-			if (inputRef.current) {
-				inputRef.current.focus()
-			}
-		}, 100)
-		return () => clearTimeout(timer)
-	}, [])
-
 	// Handle form submission
 	function handleSubmit(e: React.FormEvent) {
 		e.preventDefault()
@@ -51,12 +34,6 @@ export default function ChatNew() {
 		if (message) {
 			addMessage(message)
 			form.reset()
-			// Refocus input after sending message
-			setTimeout(() => {
-				if (inputRef.current) {
-					inputRef.current.focus()
-				}
-			}, 0)
 		}
 	}
 

@@ -8,7 +8,6 @@ export function useChat() {
 	const [state, dispatch] = useReducer(chatReducer, initialChatState)
 	const engineRef = useRef<MLCEngine | undefined>(undefined)
 	const abortControllerRef = useRef<AbortController | undefined>(undefined)
-	const generationStartedRef = useRef<boolean>(false)
 
 	// Handle model loading
 	const loadModel = useCallback(async (modelId: string) => {
@@ -47,19 +46,26 @@ export function useChat() {
 		}
 	}, [])
 
-	// Handle tool execution
+	// Cleanup on unmount
 	useEffect(() => {
-		if (state.status !== 'executingTool' || !state.pendingToolCall) {
-			return
+		return () => {
+			if (engineRef.current) {
+				engineRef.current.unload()
+			}
+			if (abortControllerRef.current) {
+				abortControllerRef.current.abort()
+			}
 		}
+	}, [])
 
-		const timeoutId = setTimeout(() => {
-			dispatch({ type: 'TOOL_EXECUTION_TIMEOUT' })
-		}, 30000) // 30 second timeout
+	// Direct workflow functions (replacing useEffects)
+	const executeTool = useCallback(
+		async (toolCall: { name: string; arguments: any }) => {
+			const timeoutId = setTimeout(() => {
+				dispatch({ type: 'TOOL_EXECUTION_TIMEOUT' })
+			}, 30000)
 
-		const executeTool = async () => {
 			try {
-				const toolCall = state.pendingToolCall!
 				const result = await invokeTool(toolCall.name, toolCall.arguments)
 
 				clearTimeout(timeoutId)
@@ -75,6 +81,9 @@ export function useChat() {
 						},
 					},
 				})
+
+				// Continue generation after successful tool execution
+				setTimeout(() => generateResponse(), 0)
 			} catch (error) {
 				clearTimeout(timeoutId)
 				dispatch({
@@ -82,180 +91,160 @@ export function useChat() {
 					payload: {
 						toolCall: {
 							id: crypto.randomUUID(),
-							name: state.pendingToolCall!.name,
-							arguments: state.pendingToolCall!.arguments,
+							name: toolCall.name,
+							arguments: toolCall.arguments,
 						},
 						error: error instanceof Error ? error : new Error(String(error)),
 					},
 				})
 			}
-		}
+		},
+		[],
+	)
 
-		executeTool()
-
-		return () => {
-			clearTimeout(timeoutId)
-		}
-	}, [state.status, state.pendingToolCall])
-
-	// Handle message generation
-	useEffect(() => {
-		if (state.status !== 'generating' || !state.engine) {
-			generationStartedRef.current = false
+	const generateResponse = useCallback(async () => {
+		if (!state.engine) {
 			return
 		}
 
-		// Prevent multiple generations from running simultaneously
-		if (generationStartedRef.current) {
-			return
-		}
-		generationStartedRef.current = true
+		try {
+			// Cancel any previous generation
+			if (abortControllerRef.current) {
+				abortControllerRef.current.abort()
+			}
 
-		const generateResponse = async () => {
-			try {
-				// Cancel any previous generation
-				if (abortControllerRef.current) {
-					abortControllerRef.current.abort()
-				}
+			abortControllerRef.current = new AbortController()
+			const signal = abortControllerRef.current.signal
 
-				abortControllerRef.current = new AbortController()
-				const signal = abortControllerRef.current.signal
-
-				// Convert messages to the format expected by the engine
-				const messages: Array<ChatCompletionMessageParam> = state.messages
-					.filter(
-						(msg) => msg.role !== 'assistant' || msg.content.trim() !== '',
-					)
-					.map((msg) => {
-						if (msg.role === 'tool') {
-							return {
-								role: 'tool' as const,
-								content: msg.content,
-								tool_call_id: msg.toolCall?.id,
-							}
-						}
+			// Convert messages to the format expected by the engine
+			const messages: Array<ChatCompletionMessageParam> = state.messages
+				.filter((msg) => msg.role !== 'assistant' || msg.content.trim() !== '')
+				.map((msg) => {
+					if (msg.role === 'tool') {
 						return {
-							role: msg.role as 'user' | 'assistant' | 'system',
+							role: 'tool' as const,
 							content: msg.content,
+							tool_call_id: msg.toolCall?.id,
 						}
-					})
-
-				// Remove the empty assistant message from the end for completion
-				const messagesForCompletion =
-					removeMessagesAfterLastUserOrToolMessage(messages)
-
-				// Update status to searching (without triggering effect re-run)
-				dispatch({ type: 'SET_STATUS', payload: { status: 'searching' } })
-
-				// Search for relevant tools
-				const searchResults = await search(messagesForCompletion)
-
-				// Don't dispatch status back to generating - let the streaming handle it
-				const tools = searchResults.map((tool) => ({
-					id: tool.id,
-					llmDescription: tool.llmDescription,
-				}))
-
-				// Prepare system message with tool instructions
-				const systemMessages: Array<ChatCompletionMessageParam> = []
-				if (tools.length > 0) {
-					systemMessages.push({
-						role: 'system',
-						content: `You are a helpful assistant that can use tools to help the user. Below is a list of tools available:
-
-${tools.map((tool) => tool.llmDescription).join('\n')}
-
-To call a tool, use this exact format:
-[TOOL_CALL:${state.toolBoundaryId}]
-{"name": "tool_name", "arguments": {"arg1": "value1"}}
-[/TOOL_CALL:${state.toolBoundaryId}]
-
-Only call tools when necessary to help the user.`,
-					})
-				} else {
-					systemMessages.push({
-						role: 'system',
-						content:
-							'You are a helpful AI assistant. Be concise and friendly in your responses.',
-					})
-				}
-
-				const allMessages = [...systemMessages, ...messagesForCompletion]
-
-				// Create streaming chat completion
-				if (!state.engine) {
-					throw new Error('Engine not available for generation')
-				}
-
-				const stream = await state.engine.chat.completions.create({
-					messages: allMessages,
-					stream: true,
-					temperature: 0.7,
-					max_tokens: 1000,
+					}
+					return {
+						role: msg.role as 'user' | 'assistant' | 'system',
+						content: msg.content,
+					}
 				})
 
-				for await (const chunk of stream) {
-					if (signal.aborted) {
-						break
-					}
+			// Remove the empty assistant message from the end for completion
+			const messagesForCompletion =
+				removeMessagesAfterLastUserOrToolMessage(messages)
 
-					const content = chunk.choices[0]?.delta?.content || ''
-					if (content) {
-						dispatch({ type: 'STREAM_CHUNK', payload: { chunk: content } })
-					}
+			// Update status to searching
+			dispatch({ type: 'SET_STATUS', payload: { status: 'searching' } })
+
+			// Search for relevant tools
+			const searchResults = await search(messagesForCompletion)
+
+			// Update status to generating for streaming
+			dispatch({ type: 'SET_STATUS', payload: { status: 'generating' } })
+
+			const tools = searchResults.map((tool) => ({
+				id: tool.id,
+				llmDescription: tool.llmDescription,
+			}))
+
+			// Prepare system message with tool instructions
+			const systemMessages: Array<ChatCompletionMessageParam> = []
+			if (tools.length > 0) {
+				systemMessages.push({
+					role: 'system',
+					content: `You are a helpful assistant that can use tools to help the user. Below is a list of tools available:
+
+${tools
+	.map((tool) => `<tool id="${tool.id}">\n${tool.llmDescription}\n</tool>`)
+	.join('\n\n')}
+
+When you need to use a tool, format your response as: [TOOL_CALL:${state.toolBoundaryId}]{"name": "tool_name", "arguments": {"key": "value"}}[/TOOL_CALL:${state.toolBoundaryId}]
+
+Important: Only use the exact tool names and argument structures shown above.`,
+				})
+			} else {
+				systemMessages.push({
+					role: 'system',
+					content:
+						'You are a helpful AI assistant. Be concise and friendly in your responses.',
+				})
+			}
+
+			const allMessages = [...systemMessages, ...messagesForCompletion]
+
+			// Create streaming chat completion
+			const stream = await state.engine.chat.completions.create({
+				messages: allMessages,
+				stream: true,
+				temperature: 0.7,
+				max_tokens: 1000,
+			})
+
+			for await (const chunk of stream) {
+				if (signal.aborted) {
+					break
 				}
 
-				if (!signal.aborted) {
-					dispatch({ type: 'GENERATION_COMPLETE' })
+				const content = chunk.choices[0]?.delta?.content || ''
+				if (content) {
+					dispatch({ type: 'STREAM_CHUNK', payload: { chunk: content } })
 				}
-			} catch (error) {
-				if (error instanceof Error && error.name !== 'AbortError') {
-					dispatch({
-						type: 'GENERATION_ERROR',
-						payload: { error },
-					})
-				}
-			} finally {
-				generationStartedRef.current = false
+			}
+
+			if (!signal.aborted) {
+				dispatch({ type: 'GENERATION_COMPLETE' })
+			}
+		} catch (error) {
+			if (error instanceof Error && error.name !== 'AbortError') {
+				dispatch({
+					type: 'GENERATION_ERROR',
+					payload: { error },
+				})
 			}
 		}
+	}, [state.engine, state.messages, state.toolBoundaryId])
 
-		generateResponse()
-
-		return () => {
-			if (abortControllerRef.current) {
-				abortControllerRef.current.abort()
-			}
-		}
-	}, [state.status, state.engine])
-
-	// Cleanup on unmount
-	useEffect(() => {
-		return () => {
-			if (engineRef.current) {
-				engineRef.current.unload()
-			}
-			if (abortControllerRef.current) {
-				abortControllerRef.current.abort()
-			}
-		}
-	}, [])
-
-	const addMessage = useCallback((content: string) => {
-		dispatch({ type: 'ADD_MESSAGE', payload: { content } })
-	}, [])
+	const addMessage = useCallback(
+		(content: string) => {
+			dispatch({ type: 'ADD_MESSAGE', payload: { content } })
+			// Directly trigger generation workflow after adding message
+			setTimeout(() => generateResponse(), 0)
+		},
+		[generateResponse],
+	)
 
 	const clearError = useCallback(() => {
 		dispatch({ type: 'CLEAR_ERROR' })
 	}, [])
 
-	const approveToolRequest = useCallback((requestId: string) => {
-		dispatch({ type: 'APPROVE_TOOL_REQUEST', payload: { requestId } })
-	}, [])
+	const approveToolRequest = useCallback(
+		(requestId: string) => {
+			dispatch({ type: 'APPROVE_TOOL_REQUEST', payload: { requestId } })
+			// Directly trigger tool execution workflow after approval
+			const toolCallRequest = state.toolCallRequests[requestId]
+			if (toolCallRequest) {
+				setTimeout(() => executeTool(toolCallRequest.toolCall), 0)
+			}
+		},
+		[state.toolCallRequests, executeTool],
+	)
 
-	const rejectToolRequest = useCallback((requestId: string) => {
-		dispatch({ type: 'REJECT_TOOL_REQUEST', payload: { requestId } })
-	}, [])
+	const rejectToolRequest = useCallback(
+		(requestId: string) => {
+			dispatch({ type: 'REJECT_TOOL_REQUEST', payload: { requestId } })
+			// After rejection, continue generation if there are more messages to process
+			setTimeout(() => {
+				if (state.queuedMessages.length > 0) {
+					generateResponse()
+				}
+			}, 0)
+		},
+		[state.queuedMessages, generateResponse],
+	)
 
 	return {
 		state,
