@@ -7,7 +7,7 @@ import {
 	type ChatAction,
 } from './chat-reducer'
 import { search } from './search-engine'
-import { getErrorMessage, parseToolCall } from './utils'
+import { getErrorMessage } from './utils'
 import { invokeTool } from './tools'
 
 export function useChat() {

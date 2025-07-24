@@ -173,9 +173,46 @@ describe('useChat integration', () => {
 		})
 
 		// Should flush buffer to content
-		expect(state.messages[1].content).toBe(
-			'I need to [TOOL_CALL:make a call to the API directly.',
-		)
+		expect(state.messages[1].content).toBe('I need to [TOOL_CALL:make a call to the API directly.')
+		expect(state.streamBuffer).toBeUndefined()
+	})
+
+	test('should detect complete tool calls in a single chunk', () => {
+		let state = initialChatState
+
+		// Set up generating state
+		const mockEngine = { mock: 'engine' } as any
+		state = chatReducer(state, {
+			type: 'MODEL_LOAD_SUCCESS',
+			payload: { engine: mockEngine },
+		})
+
+		state = chatReducer(state, {
+			type: 'ADD_MESSAGE',
+			payload: { content: 'Test API' },
+		})
+
+		// Stream a complete tool call in a single chunk (like the bug report)
+		const toolBoundaryId = state.toolBoundaryId!
+		state = chatReducer(state, {
+			type: 'STREAM_CHUNK',
+			payload: { 
+				chunk: `I'll test that API for you.\n\n[TOOL_CALL:${toolBoundaryId}]\n{"name": "test-api", "arguments": {"url": "https://example.com/api", "method": "GET", "headers": "{}", "body": ""}}\n[/TOOL_CALL:${toolBoundaryId}]`
+			},
+		})
+
+		// Should detect the complete tool call and transition to awaiting approval
+		expect(state.status).toBe('awaitingToolApproval')
+		expect(state.pendingToolCall).toEqual({
+			name: 'test-api',
+			arguments: {
+				url: 'https://example.com/api',
+				method: 'GET',
+				headers: '{}',
+				body: ''
+			}
+		})
+		expect(state.messages[1].content).toBe('I\'ll test that API for you.\n\n')
 		expect(state.streamBuffer).toBeUndefined()
 	})
 

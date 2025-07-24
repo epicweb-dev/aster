@@ -257,14 +257,7 @@ function detectToolCallInBuffer(
 	return { toolCall: null, remainingBuffer: buffer }
 }
 
-function shouldBufferContent(
-	content: string,
-	existingBuffer: string = '',
-): boolean {
-	const combined = existingBuffer + content
-	// Check if it looks like the start of a tool call but not a complete one
-	return combined.includes('[TOOL_CALL:') && !combined.includes('[/TOOL_CALL:')
-}
+
 
 function extractContentBeforeToolCall(content: string): {
 	beforeToolCall: string
@@ -389,7 +382,34 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 					extractContentBeforeToolCall(chunk)
 
 				if (toolCallPart) {
-					// Start buffering the tool call part
+					// Check if this chunk contains a complete tool call
+					if (state.toolBoundaryId) {
+						const { toolCall, remainingBuffer } = detectToolCallInBuffer(
+							toolCallPart,
+							state.toolBoundaryId,
+						)
+
+						if (toolCall) {
+							// Found a complete tool call in a single chunk
+							return {
+								...state,
+								status: 'awaitingToolApproval',
+								pendingToolCall: toolCall,
+								bufferedToolContent: toolCallPart.slice(
+									0,
+									toolCallPart.length - remainingBuffer.length,
+								),
+								streamBuffer: undefined,
+								messages: state.messages.map((msg) =>
+									msg.id === state.assistantMessageId
+										? { ...msg, content: msg.content + beforeToolCall + remainingBuffer }
+										: msg,
+								),
+							}
+						}
+					}
+
+					// Start buffering the tool call part (incomplete tool call)
 					return {
 						...state,
 						streamBuffer: toolCallPart,

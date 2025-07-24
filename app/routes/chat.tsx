@@ -3,7 +3,7 @@ import { useChat } from '../lib/use-chat'
 import { useAutoScroll } from '../lib/use-autoscroll'
 
 export default function ChatNew() {
-	const { state, loadModel, addMessage, clearError } = useChat()
+	const { state, loadModel, addMessage, clearError, approveToolCall, rejectToolCall } = useChat()
 	const { containerRef, scrollTargetRef } = useAutoScroll()
 	const inputRef = useRef<HTMLInputElement>(null)
 
@@ -104,6 +104,53 @@ export default function ChatNew() {
 						>
 							×
 						</button>
+					</div>
+				</div>
+			) : null}
+
+			{/* Tool Approval */}
+			{state.status === 'awaitingToolApproval' && state.pendingToolCall ? (
+				<div className="border border-blue-200 bg-blue-50 px-6 py-4 dark:border-blue-800 dark:bg-blue-900/20">
+					<div className="flex items-start space-x-4">
+						<div className="flex-1">
+							<h3 className="text-sm font-medium text-blue-900 dark:text-blue-100">
+								Tool Call Request
+							</h3>
+							<p className="mt-1 text-sm text-blue-800 dark:text-blue-200">
+								The assistant wants to use the <strong>{state.pendingToolCall.name}</strong> tool with the following arguments:
+							</p>
+							<div className="mt-2 rounded bg-blue-100 px-3 py-2 dark:bg-blue-800/50">
+								<pre className="text-xs text-blue-900 dark:text-blue-100">
+									{JSON.stringify(state.pendingToolCall.arguments, null, 2)}
+								</pre>
+							</div>
+						</div>
+						<div className="flex space-x-2">
+							<button
+								onClick={approveToolCall}
+								className="rounded bg-green-600 px-3 py-1 text-sm text-white hover:bg-green-700 focus:ring-2 focus:ring-green-500"
+							>
+								Approve
+							</button>
+							<button
+								onClick={rejectToolCall}
+								className="rounded bg-red-600 px-3 py-1 text-sm text-white hover:bg-red-700 focus:ring-2 focus:ring-red-500"
+							>
+								Reject
+							</button>
+						</div>
+					</div>
+				</div>
+			) : null}
+
+			{/* Tool Execution Status */}
+			{state.status === 'executingTool' ? (
+				<div className="border border-yellow-200 bg-yellow-50 px-6 py-3 dark:border-yellow-800 dark:bg-yellow-900/20">
+					<div className="flex items-center space-x-2">
+						<div className="h-4 w-4 animate-spin rounded-full border-2 border-yellow-600 border-t-transparent"></div>
+						<p className="text-sm text-yellow-800 dark:text-yellow-200">
+							Executing tool...
+						</p>
 					</div>
 				</div>
 			) : null}
