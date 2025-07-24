@@ -1,4 +1,6 @@
 import { expect, test, describe, vi } from 'vitest'
+import { renderHook, act } from '@testing-library/react'
+import { useChat } from './use-chat'
 import { chatReducer, initialChatState } from './chat-reducer'
 import { consoleLog } from '#tests/test-setup'
 
@@ -263,9 +265,10 @@ describe('useChat integration', () => {
 	})
 
 	test('should handle tool call spread across multiple realistic chunks', () => {
-		consoleLog.mockImplementation(() => {})
+		// Allow console.log for debugging
+		consoleLog.mockImplementation(console.log)
 
-		let state = initialChatState
+		let state = { ...initialChatState, logLevel: 'debug' as const }
 
 		// Set up generating state
 		const mockEngine = { mock: 'engine' } as any
@@ -305,7 +308,18 @@ describe('useChat integration', () => {
 			}
 		}
 
+		// Debug: Check what actually happened
+		console.log('Final state status:', state.status)
+		console.log('Final message content:', state.messages[1]?.content)
+		console.log('Stream buffer:', state.streamBuffer)
+		console.log('Pending tool call:', state.pendingToolCall)
+
 		// Should detect the complete tool call and transition to awaiting approval
+		if (state.status !== 'awaitingToolApproval') {
+			console.log('Expected awaitingToolApproval but got:', state.status)
+			console.log('Full state:', JSON.stringify(state, null, 2))
+		}
+
 		expect(state.status).toBe('awaitingToolApproval')
 		expect(state.pendingToolCall).toEqual({
 			name: 'test-api',
@@ -431,5 +445,48 @@ describe('useChat integration', () => {
 			role: 'assistant',
 			content: '',
 		})
+	})
+
+	test('should debug tool execution getting stuck', () => {
+		consoleLog.mockImplementation(() => {})
+
+		let state = { ...initialChatState, logLevel: 'debug' as const }
+
+		// Set up generating state
+		const mockEngine = { mock: 'engine' } as any
+		state = chatReducer(state, {
+			type: 'MODEL_LOAD_SUCCESS',
+			payload: { engine: mockEngine },
+		})
+
+		state = chatReducer(state, {
+			type: 'ADD_MESSAGE',
+			payload: { content: 'What is the weather?' },
+		})
+
+		// Simulate a tool call being detected
+		const toolCall = {
+			name: 'weather',
+			arguments: { location: 'Highland, Utah' },
+		}
+
+		state = chatReducer(state, {
+			type: 'PENDING_TOOL_CALL',
+			payload: {
+				toolCall,
+				bufferedContent: `[TOOL_CALL:${state.toolBoundaryId}]\n{"name": "weather", "arguments": {"location": "Highland, Utah"}}\n[/TOOL_CALL:${state.toolBoundaryId}]`,
+			},
+		})
+
+		expect(state.status).toBe('awaitingToolApproval')
+		expect(state.pendingToolCall).toEqual(toolCall)
+
+		// Approve the tool call
+		state = chatReducer(state, {
+			type: 'APPROVE_TOOL_CALL',
+		})
+
+		expect(state.status).toBe('executingTool')
+		console.log('Final state:', state)
 	})
 })

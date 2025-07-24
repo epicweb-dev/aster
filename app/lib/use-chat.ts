@@ -50,11 +50,16 @@ export function useChat() {
 			return
 		}
 
+		const timeoutId = setTimeout(() => {
+			dispatch({ type: 'TOOL_EXECUTION_TIMEOUT' })
+		}, 30000) // 30 second timeout
+
 		const executeTool = async () => {
 			try {
 				const toolCall = state.pendingToolCall!
 				const result = await invokeTool(toolCall.name, toolCall.arguments)
 
+				clearTimeout(timeoutId)
 				dispatch({
 					type: 'TOOL_EXECUTION_SUCCESS',
 					payload: {
@@ -68,6 +73,7 @@ export function useChat() {
 					},
 				})
 			} catch (error) {
+				clearTimeout(timeoutId)
 				dispatch({
 					type: 'TOOL_EXECUTION_ERROR',
 					payload: {
@@ -83,6 +89,10 @@ export function useChat() {
 		}
 
 		executeTool()
+
+		return () => {
+			clearTimeout(timeoutId)
+		}
 	}, [state.status, state.pendingToolCall])
 
 	// Handle message generation

@@ -1,5 +1,6 @@
 import type { MLCEngine } from '@mlc-ai/web-llm'
 import { getErrorMessage, parseToolCall } from './utils'
+import { invokeTool } from './tools'
 
 // Reuse message types from the existing chat machine
 export type BaseMessage = {
@@ -58,6 +59,7 @@ export type ChatState = {
 	}
 	bufferedToolContent?: string
 	streamBuffer?: string
+	logLevel?: LogLevel
 }
 
 export type ChatAction =
@@ -136,6 +138,9 @@ export type ChatAction =
 				error: Error
 			}
 	  }
+	| {
+			type: 'TOOL_EXECUTION_TIMEOUT'
+	  }
 
 export const initialChatState: ChatState = {
 	status: 'idle',
@@ -146,6 +151,7 @@ export const initialChatState: ChatState = {
 	},
 	messages: [],
 	queuedMessages: [],
+	logLevel: 'silent',
 }
 
 function createUserMessage(content: string): UserMessage {
@@ -313,7 +319,71 @@ function isValidToolCallBuffer(buffer: string): boolean {
 	return true
 }
 
-export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+// Logging system
+const logLevels = {
+	debug: 0,
+	info: 1,
+	warn: 2,
+	error: 3,
+	silent: 4,
+} as const
+
+type LogLevel = keyof typeof logLevels
+
+const eventLogLevels = {
+	LOAD_MODEL: 'info',
+	MODEL_LOAD_PROGRESS: 'debug',
+	MODEL_LOAD_SUCCESS: 'info',
+	MODEL_LOAD_ERROR: 'error',
+	ADD_MESSAGE: 'info',
+	START_GENERATION: 'info',
+	STREAM_CHUNK: 'debug',
+	GENERATION_COMPLETE: 'info',
+	GENERATION_ERROR: 'error',
+	CLEAR_ERROR: 'info',
+	PENDING_TOOL_CALL: 'info',
+	APPROVE_TOOL_CALL: 'info',
+	REJECT_TOOL_CALL: 'info',
+	TOOL_EXECUTION_SUCCESS: 'info',
+	TOOL_EXECUTION_ERROR: 'error',
+	TOOL_EXECUTION_TIMEOUT: 'warn',
+} satisfies Record<ChatAction['type'], LogLevel>
+
+function logReducerEvent(
+	action: ChatAction,
+	beforeState: ChatState,
+	afterState: ChatState,
+	logLevel: LogLevel,
+) {
+	const eventLevel = eventLogLevels[action.type]
+	if (!eventLevel) return
+
+	if (logLevels[eventLevel] >= logLevels[logLevel]) {
+		const logFn =
+			eventLevel === 'debug'
+				? 'log'
+				: eventLevel === 'info'
+					? 'log'
+					: eventLevel
+		console.group(`🔄 Action: ${action.type}`)
+		console[logFn]('Action:', action)
+		console[logFn]('Before:', beforeState)
+		console[logFn]('After:', afterState)
+		console.groupEnd()
+	}
+}
+
+function withLogging(
+	reducer: (state: ChatState, action: ChatAction) => ChatState,
+) {
+	return (state: ChatState, action: ChatAction): ChatState => {
+		const afterState = reducer(state, action)
+		logReducerEvent(action, state, afterState, state.logLevel || 'silent')
+		return afterState
+	}
+}
+
+function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 	switch (action.type) {
 		case 'LOAD_MODEL':
 			return {
@@ -627,7 +697,32 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 			}
 		}
 
+		case 'TOOL_EXECUTION_TIMEOUT': {
+			if (!state.pendingToolCall) {
+				return state
+			}
+
+			const timeoutToolCall = {
+				...state.pendingToolCall,
+				id: crypto.randomUUID(),
+				result: 'Error: Tool execution timed out',
+			}
+			const toolMessage = createToolMessage(timeoutToolCall)
+			const newAssistantMessage = createAssistantMessage()
+
+			return {
+				...state,
+				status: 'generating',
+				messages: [...state.messages, toolMessage, newAssistantMessage],
+				assistantMessageId: newAssistantMessage.id,
+				pendingToolCall: undefined,
+				bufferedToolContent: undefined,
+			}
+		}
+
 		default:
 			return state
 	}
 }
+
+export const chatReducer = withLogging(chatReducerImpl)
