@@ -271,6 +271,48 @@ function extractContentBeforeToolCall(content: string): {
 	}
 }
 
+function shouldStartBuffering(
+	content: string,
+	existingBuffer: string = '',
+): boolean {
+	const combined = existingBuffer + content
+	const toolCallStart = '[TOOL_CALL:'
+
+	// Check if we're building up to a tool call
+	for (let i = 1; i <= Math.min(combined.length, toolCallStart.length); i++) {
+		if (toolCallStart.startsWith(combined.slice(-i))) {
+			return true
+		}
+	}
+
+	return false
+}
+
+function isValidToolCallBuffer(buffer: string): boolean {
+	const toolCallStart = '[TOOL_CALL:'
+
+	// If buffer is shorter than the start pattern, check if it's a valid prefix
+	if (buffer.length <= toolCallStart.length) {
+		return toolCallStart.startsWith(buffer)
+	}
+
+	// If buffer is longer, it should start with the pattern
+	if (!buffer.startsWith(toolCallStart)) {
+		return false
+	}
+
+	// Check if the content after [TOOL_CALL: looks like a valid tool call
+	const afterStart = buffer.substring(toolCallStart.length)
+
+	// If it contains patterns that clearly indicate natural language, it's not a tool call
+	// Be more specific to avoid rejecting valid UUIDs
+	if (/\s+[a-z]{3,}/.test(afterStart) || /[.!?]/.test(afterStart)) {
+		return false
+	}
+
+	return true
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 	switch (action.type) {
 		case 'LOAD_MODEL':
@@ -374,8 +416,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 			const chunk = action.payload.chunk
 			const currentBuffer = state.streamBuffer || ''
 
-			// If we're not currently buffering, check if this chunk starts a tool call
+			// If we're not currently buffering
 			if (!currentBuffer) {
+				// Check if this chunk contains the start of a tool call
 				const { beforeToolCall, toolCallPart } =
 					extractContentBeforeToolCall(chunk)
 
@@ -410,7 +453,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 						}
 					}
 
-					// Start buffering the tool call part (incomplete tool call)
+					// Start buffering the tool call part
 					return {
 						...state,
 						streamBuffer: toolCallPart,
@@ -420,21 +463,43 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 								: msg,
 						),
 					}
-				} else {
-					// Normal streaming - add chunk to message content
+				}
+
+				// Check if this chunk should start buffering (single character case)
+				if (shouldStartBuffering(chunk)) {
 					return {
 						...state,
-						messages: state.messages.map((msg) =>
-							msg.id === state.assistantMessageId
-								? { ...msg, content: msg.content + chunk }
-								: msg,
-						),
+						streamBuffer: chunk,
 					}
+				}
+
+				// Normal streaming - add chunk to message content
+				return {
+					...state,
+					messages: state.messages.map((msg) =>
+						msg.id === state.assistantMessageId
+							? { ...msg, content: msg.content + chunk }
+							: msg,
+					),
 				}
 			}
 
 			// We're currently buffering - add chunk to buffer
 			const newBuffer = currentBuffer + chunk
+
+			// Check if the buffer is still a valid tool call prefix
+			if (!isValidToolCallBuffer(newBuffer)) {
+				// Not a valid tool call, flush buffer + chunk to content
+				return {
+					...state,
+					streamBuffer: undefined,
+					messages: state.messages.map((msg) =>
+						msg.id === state.assistantMessageId
+							? { ...msg, content: msg.content + newBuffer }
+							: msg,
+					),
+				}
+			}
 
 			// Check if we have a complete tool call in the buffer
 			if (state.toolBoundaryId) {
@@ -463,34 +528,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 				}
 			}
 
-			// Check if it's clear this is not going to be a tool call
-			const hasClosing = newBuffer.includes('[/TOOL_CALL:')
-
-			// If we have a complete tool call, it would have been handled above
-			// If we don't have closing and the buffer contains patterns that indicate it's not a tool call, flush it
-			if (!hasClosing) {
-				const afterToolCall = newBuffer.substring(
-					newBuffer.indexOf('[TOOL_CALL:') + 11,
-				)
-
-				// Check for patterns that indicate this is not a real tool call:
-				// 1. Contains spaces followed by lowercase words (natural language)
-				// 2. Doesn't start with a proper boundary ID format
-				// 3. Contains punctuation that wouldn't be in a tool call
-				const hasNaturalLanguage = /\s+[a-z]+/.test(afterToolCall)
-				const hasInvalidChars = /[.,!?]/.test(afterToolCall)
-				const tooLong = afterToolCall.length > 100
-
-				if (hasNaturalLanguage || hasInvalidChars || tooLong) {
-					return {
-						...state,
-						streamBuffer: undefined,
-						messages: state.messages.map((msg) =>
-							msg.id === state.assistantMessageId
-								? { ...msg, content: msg.content + newBuffer }
-								: msg,
-						),
-					}
+			// Continue buffering - but check if buffer is getting too long for a valid tool call
+			if (newBuffer.length > 500) {
+				// Buffer too long, probably not a tool call
+				return {
+					...state,
+					streamBuffer: undefined,
+					messages: state.messages.map((msg) =>
+						msg.id === state.assistantMessageId
+							? { ...msg, content: msg.content + newBuffer }
+							: msg,
+					),
 				}
 			}
 
