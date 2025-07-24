@@ -354,7 +354,8 @@ describe('useChat integration', () => {
 
 		// Approve the tool call
 		state = chatReducer(state, {
-			type: 'APPROVE_TOOL_CALL',
+			type: 'APPROVE_TOOL_REQUEST',
+			payload: { requestId: '123' },
 		})
 
 		expect(state.status).toBe('executingTool')
@@ -402,7 +403,8 @@ describe('useChat integration', () => {
 
 		// Transition to executing tool
 		state = chatReducer(state, {
-			type: 'APPROVE_TOOL_CALL',
+			type: 'APPROVE_TOOL_REQUEST',
+			payload: { requestId: '123' },
 		})
 
 		// Tool execution fails
@@ -470,7 +472,8 @@ describe('useChat integration', () => {
 
 		// Manually approve tool call (simulating user approval)
 		state = chatReducer(state, {
-			type: 'APPROVE_TOOL_CALL',
+			type: 'APPROVE_TOOL_REQUEST',
+			payload: { requestId: '123' },
 		})
 
 		expect(state.status).toBe('executingTool')

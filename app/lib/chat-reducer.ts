@@ -1,6 +1,5 @@
-import type { MLCEngine } from '@mlc-ai/web-llm'
-import { getErrorMessage, parseToolCall } from './utils'
-import { invokeTool } from './tools'
+import type { WebWorkerMLCEngine } from '@mlc-ai/web-llm'
+import { parseToolCall } from './utils'
 
 // Reuse message types from the existing chat machine
 export type BaseMessage = {
@@ -51,7 +50,7 @@ export type ChatState = {
 	}
 	messages: Array<Message>
 	queuedMessages: Array<Message>
-	engine?: MLCEngine
+	engine?: WebWorkerMLCEngine
 	assistantMessageId?: string
 	toolBoundaryId?: string
 	pendingToolCall?: {
@@ -95,7 +94,7 @@ export type ChatAction =
 	  }
 	| {
 			type: 'MODEL_LOAD_SUCCESS'
-			payload: { engine: MLCEngine }
+			payload: { engine: WebWorkerMLCEngine }
 	  }
 	| {
 			type: 'MODEL_LOAD_ERROR'

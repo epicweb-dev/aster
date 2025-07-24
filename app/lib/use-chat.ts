@@ -1,12 +1,15 @@
 import { useReducer, useEffect, useRef, useCallback } from 'react'
-import type { MLCEngine, ChatCompletionMessageParam } from '@mlc-ai/web-llm'
+import type {
+	WebWorkerMLCEngine,
+	ChatCompletionMessageParam,
+} from '@mlc-ai/web-llm'
 import { chatReducer, initialChatState } from './chat-reducer'
 import { search } from './search-engine'
 import { invokeTool } from './tools'
 
 export function useChat() {
 	const [state, dispatch] = useReducer(chatReducer, initialChatState)
-	const engineRef = useRef<MLCEngine | undefined>(undefined)
+	const engineRef = useRef<WebWorkerMLCEngine | undefined>(undefined)
 	const abortControllerRef = useRef<AbortController | undefined>(undefined)
 
 	// Handle model loading
@@ -29,9 +32,11 @@ export function useChat() {
 						payload: { progress: progress.progress },
 					})
 				},
-				appConfig: {
-					useIndexedDB: true,
-				},
+				// TODO: figure out what to put in model_list
+				// appConfig: {
+				// 	useIndexedDBCache: true,
+				// 	model_list: [],
+				// },
 			})
 
 			engineRef.current = engine

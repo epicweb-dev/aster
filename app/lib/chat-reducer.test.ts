@@ -553,7 +553,8 @@ describe('Tool Call Functionality', () => {
 			}
 
 			const action: ChatAction = {
-				type: 'APPROVE_TOOL_CALL',
+				type: 'APPROVE_TOOL_REQUEST',
+				payload: { requestId: '123' },
 			}
 
 			const newState = chatReducer(awaitingState, action)
@@ -587,7 +588,8 @@ describe('Tool Call Functionality', () => {
 			}
 
 			const action: ChatAction = {
-				type: 'REJECT_TOOL_CALL',
+				type: 'REJECT_TOOL_REQUEST',
+				payload: { requestId: '123' },
 			}
 
 			const newState = chatReducer(awaitingState, action)
