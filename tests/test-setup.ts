@@ -2,18 +2,18 @@ import { type MockInstance, beforeEach, vi } from 'vitest'
 
 // Mock web-llm globally since it won't work outside the browser and is very slow
 vi.mock('@mlc-ai/web-llm', () => ({
-  CreateMLCEngine: vi.fn().mockResolvedValue({
-    chat: {
-      completions: {
-        create: vi.fn().mockResolvedValue({
-          async *[Symbol.asyncIterator]() {
-            yield { choices: [{ delta: { content: 'Mock response' } }] }
-          }
-        }),
-      },
-    },
-    unload: vi.fn(),
-  }),
+	CreateMLCEngine: vi.fn().mockResolvedValue({
+		chat: {
+			completions: {
+				create: vi.fn().mockResolvedValue({
+					async *[Symbol.asyncIterator]() {
+						yield { choices: [{ delta: { content: 'Mock response' } }] }
+					},
+				}),
+			},
+		},
+		unload: vi.fn(),
+	}),
 }))
 
 export let consoleInfo: MockInstance<(typeof console)['info']>
