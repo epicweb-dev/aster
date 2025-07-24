@@ -367,4 +367,121 @@ describe('chatReducer', () => {
 			expect(newState.lastError).toBeUndefined()
 		})
 	})
+
+	describe('Queue Processing Bug Fixes', () => {
+		test('should process queued messages when adding message to ready state', () => {
+			const readyStateWithQueue: ChatState = {
+				...state,
+				status: 'ready',
+				engine: { mock: 'engine' } as any,
+				queuedMessages: [
+					{
+						id: '1',
+						role: 'user',
+						content: 'Queued message',
+						timestamp: new Date(),
+					},
+				],
+			}
+
+			const action: ChatAction = {
+				type: 'ADD_MESSAGE',
+				payload: { content: 'New message' },
+			}
+
+			const newState = chatReducer(readyStateWithQueue, action)
+
+			expect(newState.status).toBe('generating')
+			expect(newState.queuedMessages).toHaveLength(0)
+			expect(newState.messages).toHaveLength(3) // queued + new + assistant
+			expect(newState.messages[0]).toMatchObject({
+				role: 'user',
+				content: 'Queued message',
+			})
+			expect(newState.messages[1]).toMatchObject({
+				role: 'user',
+				content: 'New message',
+			})
+			expect(newState.messages[2]).toMatchObject({
+				role: 'assistant',
+				content: '',
+			})
+		})
+
+		test('should process queued messages and start generation after GENERATION_COMPLETE', () => {
+			const generatingStateWithQueue: ChatState = {
+				...state,
+				status: 'generating',
+				assistantMessageId: 'assistant-1',
+				messages: [
+					{
+						id: 'user-1',
+						role: 'user',
+						content: 'First message',
+						timestamp: new Date(),
+					},
+					{
+						id: 'assistant-1',
+						role: 'assistant',
+						content: 'Response',
+						timestamp: new Date(),
+					},
+				],
+				queuedMessages: [
+					{
+						id: '2',
+						role: 'user',
+						content: 'Queued message',
+						timestamp: new Date(),
+					},
+				],
+			}
+
+			const action: ChatAction = {
+				type: 'GENERATION_COMPLETE',
+			}
+
+			const newState = chatReducer(generatingStateWithQueue, action)
+
+			expect(newState.status).toBe('generating') // Should start generation again
+			expect(newState.queuedMessages).toHaveLength(0)
+			expect(newState.messages).toHaveLength(4) // original 2 + queued + new assistant
+			expect(newState.messages[2]).toMatchObject({
+				role: 'user',
+				content: 'Queued message',
+			})
+			expect(newState.messages[3]).toMatchObject({
+				role: 'assistant',
+				content: '',
+			})
+			expect(newState.assistantMessageId).toBe(newState.messages[3].id)
+		})
+
+		test('should return to ready state when no queued messages after GENERATION_COMPLETE', () => {
+			const generatingState: ChatState = {
+				...state,
+				status: 'generating',
+				assistantMessageId: 'assistant-1',
+				messages: [
+					{
+						id: 'assistant-1',
+						role: 'assistant',
+						content: 'Complete response',
+						timestamp: new Date(),
+					},
+				],
+				queuedMessages: [],
+			}
+
+			const action: ChatAction = {
+				type: 'GENERATION_COMPLETE',
+			}
+
+			const newState = chatReducer(generatingState, action)
+
+			expect(newState.status).toBe('ready')
+			expect(newState.assistantMessageId).toBeUndefined()
+			expect(newState.queuedMessages).toHaveLength(0)
+		})
+	})
 })

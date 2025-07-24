@@ -271,17 +271,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 		}
 
 		case 'GENERATION_COMPLETE':
-			return {
-				...state,
-				status: 'ready',
-				assistantMessageId: undefined,
-			}
+			return transitionToReady(state)
 
 		case 'GENERATION_ERROR':
 			return {
-				...state,
-				status: 'ready',
-				assistantMessageId: undefined,
+				...transitionToReady(state),
 				lastError: {
 					cause: 'Generation Error',
 					message: action.payload.error.message,
