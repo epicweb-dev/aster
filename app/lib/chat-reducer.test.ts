@@ -525,15 +525,17 @@ describe('Tool Call Functionality', () => {
 						id: 'request-123',
 						assistantMessageId: 'assistant-1',
 						toolCall: { name: 'search', arguments: { query: 'test' } },
-						bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
-						status: 'pending'
-					}
+						bufferedContent:
+							'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+						status: 'pending',
+					},
 				},
 				pendingToolCall: {
 					name: 'search',
 					arguments: { query: 'test' },
 				},
-				bufferedToolContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				bufferedToolContent:
+					'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 			}
 
 			const action: ChatAction = {
@@ -560,9 +562,10 @@ describe('Tool Call Functionality', () => {
 						id: 'request-123',
 						assistantMessageId: 'assistant-1',
 						toolCall: { name: 'search', arguments: { query: 'test' } },
-						bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
-						status: 'pending'
-					}
+						bufferedContent:
+							'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+						status: 'pending',
+					},
 				},
 				messages: [
 					{
@@ -576,7 +579,8 @@ describe('Tool Call Functionality', () => {
 					name: 'search',
 					arguments: { query: 'test' },
 				},
-				bufferedToolContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				bufferedToolContent:
+					'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 			}
 
 			const action: ChatAction = {

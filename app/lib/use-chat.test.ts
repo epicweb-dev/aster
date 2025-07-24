@@ -436,7 +436,8 @@ describe('useChat integration', () => {
 					name: 'search',
 					arguments: { query: 'test' },
 				},
-				bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				bufferedContent:
+					'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 			},
 		})
 
@@ -520,7 +521,7 @@ describe('useChat integration', () => {
 			throw new Error('No tool call requests found')
 		}
 		const requestId = requestIds[0]
-		
+
 		state = chatReducer(state, {
 			type: 'APPROVE_TOOL_REQUEST',
 			payload: { requestId },
