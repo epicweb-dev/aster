@@ -85,7 +85,9 @@ If no tools are relevant, return an empty array:
 
 Do not include any other text in your response.`
 
-		console.log('performing search with the following prompt: \n', searchPrompt)
+		console.log('performing search with the following prompt: \n', {
+			searchPrompt,
+		})
 		// Send the search prompt to the LLM
 		const response = await llmEngine.chat.completions.create({
 			messages: [{ role: 'user', content: searchPrompt }],
