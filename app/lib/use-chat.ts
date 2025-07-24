@@ -240,6 +240,14 @@ Only call tools when necessary to help the user.`,
 		dispatch({ type: 'REJECT_TOOL_CALL' })
 	}, [])
 
+	const approveToolRequest = useCallback((requestId: string) => {
+		dispatch({ type: 'APPROVE_TOOL_REQUEST', payload: { requestId } })
+	}, [])
+
+	const rejectToolRequest = useCallback((requestId: string) => {
+		dispatch({ type: 'REJECT_TOOL_REQUEST', payload: { requestId } })
+	}, [])
+
 	return {
 		state,
 		loadModel,
@@ -247,6 +255,8 @@ Only call tools when necessary to help the user.`,
 		clearError,
 		approveToolCall,
 		rejectToolCall,
+		approveToolRequest,
+		rejectToolRequest,
 	}
 }
 

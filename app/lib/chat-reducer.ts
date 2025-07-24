@@ -60,6 +60,27 @@ export type ChatState = {
 	bufferedToolContent?: string
 	streamBuffer?: string
 	logLevel?: LogLevel
+	toolCallRequests: Record<string, ToolCallRequest>
+	currentToolRequestId?: string
+}
+
+export type ToolCallRequest = {
+	id: string
+	assistantMessageId: string
+	toolCall: {
+		name: string
+		arguments: Record<string, any>
+	}
+	bufferedContent: string
+	status:
+		| 'pending'
+		| 'approved'
+		| 'rejected'
+		| 'executing'
+		| 'completed'
+		| 'error'
+	result?: string
+	error?: string
 }
 
 export type ChatAction =
@@ -141,6 +162,14 @@ export type ChatAction =
 	| {
 			type: 'TOOL_EXECUTION_TIMEOUT'
 	  }
+	| {
+			type: 'APPROVE_TOOL_REQUEST'
+			payload: { requestId: string }
+	  }
+	| {
+			type: 'REJECT_TOOL_REQUEST'
+			payload: { requestId: string }
+	  }
 
 export const initialChatState: ChatState = {
 	status: 'idle',
@@ -152,6 +181,7 @@ export const initialChatState: ChatState = {
 	messages: [],
 	queuedMessages: [],
 	logLevel: 'silent',
+	toolCallRequests: {},
 }
 
 function createUserMessage(content: string): UserMessage {
@@ -347,6 +377,8 @@ const eventLogLevels = {
 	TOOL_EXECUTION_SUCCESS: 'info',
 	TOOL_EXECUTION_ERROR: 'error',
 	TOOL_EXECUTION_TIMEOUT: 'warn',
+	APPROVE_TOOL_REQUEST: 'info',
+	REJECT_TOOL_REQUEST: 'info',
 } satisfies Record<ChatAction['type'], LogLevel>
 
 function logReducerEvent(
@@ -638,13 +670,28 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 				lastError: undefined,
 			}
 
-		case 'PENDING_TOOL_CALL':
+		case 'PENDING_TOOL_CALL': {
+			const requestId = crypto.randomUUID()
+			const toolCallRequest: ToolCallRequest = {
+				id: requestId,
+				assistantMessageId: state.assistantMessageId!,
+				toolCall: action.payload.toolCall,
+				bufferedContent: action.payload.bufferedContent,
+				status: 'pending',
+			}
+
 			return {
 				...state,
 				status: 'awaitingToolApproval',
 				pendingToolCall: action.payload.toolCall,
 				bufferedToolContent: action.payload.bufferedContent,
+				currentToolRequestId: requestId,
+				toolCallRequests: {
+					...state.toolCallRequests,
+					[requestId]: toolCallRequest,
+				},
 			}
+		}
 
 		case 'APPROVE_TOOL_CALL':
 			return {
@@ -673,11 +720,25 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 			const toolMessage = createToolMessage(action.payload.toolCall)
 			const newAssistantMessage = createAssistantMessage()
 
+			// Update the tool call request status
+			const updatedRequests = state.currentToolRequestId
+				? {
+						...state.toolCallRequests,
+						[state.currentToolRequestId]: {
+							...state.toolCallRequests[state.currentToolRequestId],
+							status: 'completed' as const,
+							result: action.payload.toolCall.result,
+						},
+					}
+				: state.toolCallRequests
+
 			return {
 				...state,
 				status: 'generating',
 				messages: [...state.messages, toolMessage, newAssistantMessage],
 				assistantMessageId: newAssistantMessage.id,
+				currentToolRequestId: undefined,
+				toolCallRequests: updatedRequests,
 			}
 		}
 
@@ -689,11 +750,25 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 			const toolMessage = createToolMessage(errorToolCall)
 			const newAssistantMessage = createAssistantMessage()
 
+			// Update the tool call request status
+			const updatedRequests = state.currentToolRequestId
+				? {
+						...state.toolCallRequests,
+						[state.currentToolRequestId]: {
+							...state.toolCallRequests[state.currentToolRequestId],
+							status: 'error' as const,
+							error: action.payload.error.message,
+						},
+					}
+				: state.toolCallRequests
+
 			return {
 				...state,
 				status: 'generating',
 				messages: [...state.messages, toolMessage, newAssistantMessage],
 				assistantMessageId: newAssistantMessage.id,
+				currentToolRequestId: undefined,
+				toolCallRequests: updatedRequests,
 			}
 		}
 
@@ -717,6 +792,46 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 				assistantMessageId: newAssistantMessage.id,
 				pendingToolCall: undefined,
 				bufferedToolContent: undefined,
+			}
+		}
+
+		case 'APPROVE_TOOL_REQUEST': {
+			const request = state.toolCallRequests[action.payload.requestId]
+			if (!request) {
+				return state
+			}
+
+			return {
+				...state,
+				status: 'executingTool',
+				pendingToolCall: request.toolCall,
+				currentToolRequestId: action.payload.requestId,
+				toolCallRequests: {
+					...state.toolCallRequests,
+					[action.payload.requestId]: {
+						...request,
+						status: 'executing',
+					},
+				},
+			}
+		}
+
+		case 'REJECT_TOOL_REQUEST': {
+			const request = state.toolCallRequests[action.payload.requestId]
+			if (!request) {
+				return state
+			}
+
+			return {
+				...state,
+				status: 'generating',
+				toolCallRequests: {
+					...state.toolCallRequests,
+					[action.payload.requestId]: {
+						...request,
+						status: 'rejected',
+					},
+				},
 			}
 		}
 

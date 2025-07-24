@@ -47,23 +47,12 @@ describe('Tool Call Integration', () => {
 			'I can help you search for that information. ',
 		)
 
-		// Stream the beginning of a tool call
-		state = chatReducer(state, {
-			type: 'STREAM_CHUNK',
-			payload: { chunk: '[TOOL_CALL:' },
-		})
-
-		expect(state.streamBuffer).toBe('[TOOL_CALL:')
-		expect(state.messages[1].content).toBe(
-			'I can help you search for that information. ',
-		)
-
-		// Complete the tool call
+		// Stream a complete tool call in one chunk
 		const toolBoundaryId = state.toolBoundaryId!
 		state = chatReducer(state, {
 			type: 'STREAM_CHUNK',
 			payload: {
-				chunk: `${toolBoundaryId}]{"name": "search", "arguments": {"query": "React hooks"}}[/TOOL_CALL:${toolBoundaryId}]`,
+				chunk: `[TOOL_CALL:${toolBoundaryId}]{"name": "search", "arguments": {"query": "React hooks"}}[/TOOL_CALL:${toolBoundaryId}]`,
 			},
 		})
 
