@@ -185,7 +185,7 @@ export const initialChatState: ChatState = {
 	},
 	messages: [],
 	queuedMessages: [],
-	logLevel: 'silent',
+	logLevel: process.env.NODE_ENV === 'development' ? 'debug' : 'silent',
 	toolCallRequests: {},
 }
 
@@ -384,6 +384,7 @@ const eventLogLevels = {
 	TOOL_EXECUTION_TIMEOUT: 'warn',
 	APPROVE_TOOL_REQUEST: 'info',
 	REJECT_TOOL_REQUEST: 'info',
+	SET_STATUS: 'info',
 } satisfies Record<ChatAction['type'], LogLevel>
 
 function logReducerEvent(

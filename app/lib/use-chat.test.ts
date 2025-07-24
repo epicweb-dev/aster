@@ -1,7 +1,7 @@
 import { expect, test, describe, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useChat } from './use-chat'
-import { chatReducer, initialChatState } from './chat-reducer'
+import { chatReducer, initialChatState, type ChatState } from './chat-reducer'
 import { consoleLog } from '#tests/test-setup'
 
 // Mock web-llm module
@@ -433,7 +433,7 @@ describe('useChat integration', () => {
 	test('should debug tool execution getting stuck', () => {
 		consoleLog.mockImplementation(() => {})
 
-		let state = { ...initialChatState, logLevel: 'debug' as const }
+		let state: ChatState = { ...initialChatState, logLevel: 'debug' as const }
 
 		// Set up ready state with engine
 		const mockEngine = { mock: 'engine' } as any

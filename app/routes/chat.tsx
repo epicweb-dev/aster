@@ -1,6 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { useChat } from '../lib/use-chat'
 import { useAutoScroll } from '../lib/use-autoscroll'
+import { initializeEngine } from '../lib/search-engine'
+
+export function loader() {
+	void initializeEngine()
+}
 
 export default function ChatNew() {
 	const {

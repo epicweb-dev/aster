@@ -1,13 +1,7 @@
 import { useReducer, useEffect, useRef, useCallback } from 'react'
 import type { MLCEngine, ChatCompletionMessageParam } from '@mlc-ai/web-llm'
-import {
-	chatReducer,
-	initialChatState,
-	type ChatState,
-	type ChatAction,
-} from './chat-reducer'
+import { chatReducer, initialChatState } from './chat-reducer'
 import { search } from './search-engine'
-import { getErrorMessage } from './utils'
 import { invokeTool } from './tools'
 
 export function useChat() {
