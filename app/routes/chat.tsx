@@ -1,9 +1,45 @@
-import { useChat } from '@ai-sdk/react'
+import { useChat as useChatBase } from '@ai-sdk/react'
+import type { ToolInvocation, UIMessage } from 'ai'
+import { createContext, use } from 'react'
+import { tools } from '#app/lib/tools'
+import {
+	APPROVAL,
+	getToolsRequiringConfirmation,
+} from '#app/lib/human-in-the-loop-utils'
 
-export default function Chat() {
-	const { messages, input, handleInputChange, handleSubmit } = useChat({
+const ChatContext = createContext<ReturnType<typeof useChatBase> | null>(null)
+
+function ChatProvider({ children }: { children: React.ReactNode }) {
+	const chat = useChatBase({
 		api: '/api/chat',
+		maxSteps: 5,
 	})
+
+	return <ChatContext.Provider value={chat}>{children}</ChatContext.Provider>
+}
+
+function useChat() {
+	const chat = use(ChatContext)
+	if (!chat) {
+		throw new Error('useChat must be used within a ChatProvider')
+	}
+	return chat
+}
+
+function Chat() {
+	const { messages, input, handleInputChange, handleSubmit, addToolResult } =
+		useChat()
+	const toolsRequiringConfirmation = getToolsRequiringConfirmation(tools)
+
+	// Used to disable input while confirmation is pending
+	const pendingToolCallConfirmation = messages.some((m: UIMessage) =>
+		m.parts?.some(
+			(part) =>
+				part.type === 'tool-invocation' &&
+				part.toolInvocation.state === 'call' &&
+				toolsRequiringConfirmation.includes(part.toolInvocation.toolName),
+		),
+	)
 
 	return (
 		<div className="flex h-screen flex-col bg-gray-50">
@@ -45,23 +81,7 @@ export default function Chat() {
 					</div>
 				) : (
 					messages.map((message) => (
-						<div
-							key={message.id}
-							className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-						>
-							<div
-								className={`max-w-xs rounded-lg px-4 py-2 lg:max-w-md ${
-									message.role === 'user'
-										? 'bg-blue-600 text-white'
-										: 'border border-gray-200 bg-white text-gray-900'
-								}`}
-							>
-								<div className="mb-1 text-sm font-medium">
-									{message.role === 'user' ? 'You' : 'Assistant'}
-								</div>
-								<div className="text-sm leading-relaxed">{message.content}</div>
-							</div>
-						</div>
+						<Message key={message.id} message={message} />
 					))
 				)}
 			</div>
@@ -75,12 +95,13 @@ export default function Chat() {
 							name="prompt"
 							onChange={handleInputChange}
 							placeholder="Type your message..."
-							className="w-full rounded-lg border border-gray-300 px-4 py-3 transition-colors outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
+							disabled={pendingToolCallConfirmation}
+							className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none transition-colors focus:border-transparent focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
 						/>
 					</div>
 					<button
 						type="submit"
-						disabled={!input.trim()}
+						disabled={!input.trim() || pendingToolCallConfirmation}
 						className="rounded-lg bg-blue-600 px-6 py-3 font-medium text-white transition-colors hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						Send
@@ -88,5 +109,100 @@ export default function Chat() {
 				</form>
 			</div>
 		</div>
+	)
+}
+
+function Message({ message }: { message: UIMessage }) {
+	return (
+		<div
+			key={message.id}
+			className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+		>
+			<div
+				className={`max-w-xs rounded-lg px-4 py-2 lg:max-w-md ${
+					message.role === 'user'
+						? 'bg-blue-600 text-white'
+						: 'border border-gray-200 bg-white text-gray-900'
+				}`}
+			>
+				<div className="mb-1 text-sm font-medium">
+					{message.role === 'user' ? 'You' : 'Assistant'}
+				</div>
+				<div className="text-sm leading-relaxed">
+					{message.parts?.map((part, i) => {
+						switch (part.type) {
+							case 'text':
+								return <div key={i}>{part.text}</div>
+							case 'tool-invocation':
+								return (
+									<ToolInvocation key={i} invocation={part.toolInvocation} />
+								)
+							default:
+								return null
+						}
+					})}
+				</div>
+			</div>
+		</div>
+	)
+}
+
+function ToolInvocation({ invocation }: { invocation: ToolInvocation }) {
+	const { addToolResult } = useChat()
+	const { toolName, state, args, toolCallId } = invocation
+	const toolsRequiringConfirmation = getToolsRequiringConfirmation(tools)
+	const dynamicInfoStyles = 'font-mono bg-gray-100 p-1 text-sm'
+
+	// Render confirmation UI for tools that require confirmation
+	if (toolsRequiringConfirmation.includes(toolName) && state === 'call') {
+		return (
+			<div className="mt-2 text-gray-500">
+				Run <span className={dynamicInfoStyles}>{toolName}</span> with args:{' '}
+				<span className={dynamicInfoStyles}>{JSON.stringify(args)}</span>
+				<div className="flex gap-2 pt-2">
+					<button
+						className="rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
+						onClick={() =>
+							addToolResult({
+								toolCallId,
+								result: APPROVAL.YES,
+							})
+						}
+					>
+						Yes
+					</button>
+					<button
+						className="rounded bg-red-500 px-4 py-2 font-bold text-white hover:bg-red-700"
+						onClick={() =>
+							addToolResult({
+								toolCallId,
+								result: APPROVAL.NO,
+							})
+						}
+					>
+						No
+					</button>
+				</div>
+			</div>
+		)
+	}
+
+	// Show tool result
+	if (state === 'result' && invocation.result) {
+		return (
+			<div className="mt-2 rounded bg-gray-50 p-2 text-sm">
+				<strong>Tool Result:</strong> {invocation.result}
+			</div>
+		)
+	}
+
+	return null
+}
+
+export default function ChatPage() {
+	return (
+		<ChatProvider>
+			<Chat />
+		</ChatProvider>
 	)
 }

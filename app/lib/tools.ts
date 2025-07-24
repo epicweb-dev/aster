@@ -1,20 +1,25 @@
-import { type Tool, type ToolSet } from 'ai'
+import { tool } from 'ai'
 import { z } from 'zod'
 
-const weatherTool = {
-	id: 'weather.get' as const,
-	description: 'Get the current weather for a location',
-	parameters: z.object({
-		location: z.string().describe('The location to get the weather for'),
-	}),
-	execute: async (args) => {
-		console.log('Getting weather for:', args.location)
-		return {
-			weather: 'sunny',
-		}
-	},
-} satisfies Tool
+// Tool that requires human confirmation (no execute function)
+const getWeatherInformation = tool({
+	description: 'show the weather in a given city to the user',
+	parameters: z.object({ city: z.string() }),
+	// no execute function, we want human in the loop
+})
 
-export const tools = Object.fromEntries(
-	[weatherTool].entries(),
-) satisfies ToolSet
+// Tool that doesn't require confirmation (has execute function)
+const getLocalTime = tool({
+	description: 'get the local time for a specified location',
+	parameters: z.object({ location: z.string() }),
+	// including execute function -> no confirmation required
+	execute: async ({ location }) => {
+		console.log(`Getting local time for ${location}`)
+		return '10am'
+	},
+})
+
+export const tools = {
+	getWeatherInformation,
+	getLocalTime,
+}
