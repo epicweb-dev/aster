@@ -257,8 +257,6 @@ function detectToolCallInBuffer(
 	return { toolCall: null, remainingBuffer: buffer }
 }
 
-
-
 function extractContentBeforeToolCall(content: string): {
 	beforeToolCall: string
 	toolCallPart: string
@@ -402,7 +400,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 								streamBuffer: undefined,
 								messages: state.messages.map((msg) =>
 									msg.id === state.assistantMessageId
-										? { ...msg, content: msg.content + beforeToolCall + remainingBuffer }
+										? {
+												...msg,
+												content: msg.content + beforeToolCall + remainingBuffer,
+											}
 										: msg,
 								),
 							}

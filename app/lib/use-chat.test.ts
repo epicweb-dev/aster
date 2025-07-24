@@ -173,7 +173,9 @@ describe('useChat integration', () => {
 		})
 
 		// Should flush buffer to content
-		expect(state.messages[1].content).toBe('I need to [TOOL_CALL:make a call to the API directly.')
+		expect(state.messages[1].content).toBe(
+			'I need to [TOOL_CALL:make a call to the API directly.',
+		)
 		expect(state.streamBuffer).toBeUndefined()
 	})
 
@@ -196,8 +198,8 @@ describe('useChat integration', () => {
 		const toolBoundaryId = state.toolBoundaryId!
 		state = chatReducer(state, {
 			type: 'STREAM_CHUNK',
-			payload: { 
-				chunk: `I'll test that API for you.\n\n[TOOL_CALL:${toolBoundaryId}]\n{"name": "test-api", "arguments": {"url": "https://example.com/api", "method": "GET", "headers": "{}", "body": ""}}\n[/TOOL_CALL:${toolBoundaryId}]`
+			payload: {
+				chunk: `I'll test that API for you.\n\n[TOOL_CALL:${toolBoundaryId}]\n{"name": "test-api", "arguments": {"url": "https://example.com/api", "method": "GET", "headers": "{}", "body": ""}}\n[/TOOL_CALL:${toolBoundaryId}]`,
 			},
 		})
 
@@ -209,10 +211,10 @@ describe('useChat integration', () => {
 				url: 'https://example.com/api',
 				method: 'GET',
 				headers: '{}',
-				body: ''
-			}
+				body: '',
+			},
 		})
-		expect(state.messages[1].content).toBe('I\'ll test that API for you.\n\n')
+		expect(state.messages[1].content).toBe("I'll test that API for you.\n\n")
 		expect(state.streamBuffer).toBeUndefined()
 	})
 

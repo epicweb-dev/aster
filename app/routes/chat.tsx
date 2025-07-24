@@ -3,7 +3,14 @@ import { useChat } from '../lib/use-chat'
 import { useAutoScroll } from '../lib/use-autoscroll'
 
 export default function ChatNew() {
-	const { state, loadModel, addMessage, clearError, approveToolCall, rejectToolCall } = useChat()
+	const {
+		state,
+		loadModel,
+		addMessage,
+		clearError,
+		approveToolCall,
+		rejectToolCall,
+	} = useChat()
 	const { containerRef, scrollTargetRef } = useAutoScroll()
 	const inputRef = useRef<HTMLInputElement>(null)
 
@@ -117,7 +124,9 @@ export default function ChatNew() {
 								Tool Call Request
 							</h3>
 							<p className="mt-1 text-sm text-blue-800 dark:text-blue-200">
-								The assistant wants to use the <strong>{state.pendingToolCall.name}</strong> tool with the following arguments:
+								The assistant wants to use the{' '}
+								<strong>{state.pendingToolCall.name}</strong> tool with the
+								following arguments:
 							</p>
 							<div className="mt-2 rounded bg-blue-100 px-3 py-2 dark:bg-blue-800/50">
 								<pre className="text-xs text-blue-900 dark:text-blue-100">
