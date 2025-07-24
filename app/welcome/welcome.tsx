@@ -93,7 +93,12 @@ const appRoutes = [
 				className="stroke-gray-600 group-hover:stroke-current dark:stroke-gray-300"
 			>
 				<circle cx="11" cy="11" r="8" strokeWidth="1.5" />
-				<path d="m21 21-4.35-4.35" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+				<path
+					d="m21 21-4.35-4.35"
+					strokeWidth="1.5"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+				/>
 			</svg>
 		),
 	},
