@@ -8,7 +8,7 @@ import { getAvailableTools, getTool } from './tools.js'
 let engine: any = null
 let isInitializing = false
 
-async function initializeEngine() {
+export async function initializeEngine() {
 	if (engine || isInitializing) return engine
 
 	isInitializing = true
