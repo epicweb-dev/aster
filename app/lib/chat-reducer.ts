@@ -1,5 +1,5 @@
 import type { MLCEngine } from '@mlc-ai/web-llm'
-import { getErrorMessage } from './utils'
+import { getErrorMessage, parseToolCall } from './utils'
 
 // Reuse message types from the existing chat machine
 export type BaseMessage = {
@@ -27,7 +27,7 @@ export type Message =
 	| SystemMessage
 	| ToolMessage
 
-export type ChatStatus = 'idle' | 'loadingModel' | 'ready' | 'generating'
+export type ChatStatus = 'idle' | 'loadingModel' | 'ready' | 'generating' | 'awaitingToolApproval' | 'executingTool'
 
 export type ChatState = {
 	status: ChatStatus
@@ -46,6 +46,12 @@ export type ChatState = {
 	engine?: MLCEngine
 	assistantMessageId?: string
 	toolBoundaryId?: string
+	pendingToolCall?: {
+		name: string
+		arguments: Record<string, any>
+	}
+	bufferedToolContent?: string
+	streamBuffer?: string
 }
 
 export type ChatAction =
@@ -85,6 +91,44 @@ export type ChatAction =
 	  }
 	| {
 			type: 'CLEAR_ERROR'
+	  }
+	| {
+			type: 'PENDING_TOOL_CALL'
+			payload: {
+				toolCall: {
+					name: string
+					arguments: Record<string, any>
+				}
+				bufferedContent: string
+			}
+	  }
+	| {
+			type: 'APPROVE_TOOL_CALL'
+	  }
+	| {
+			type: 'REJECT_TOOL_CALL'
+	  }
+	| {
+			type: 'TOOL_EXECUTION_SUCCESS'
+			payload: {
+				toolCall: {
+					id: string
+					name: string
+					arguments: Record<string, any>
+					result: string
+				}
+			}
+	  }
+	| {
+			type: 'TOOL_EXECUTION_ERROR'
+			payload: {
+				toolCall: {
+					id: string
+					name: string
+					arguments: Record<string, any>
+				}
+				error: Error
+			}
 	  }
 
 export const initialChatState: ChatState = {
@@ -162,6 +206,63 @@ function transitionToReady(state: ChatState): ChatState {
 	}
 
 	return processedState
+}
+
+function createToolMessage(toolCall: {
+	id: string
+	name: string
+	arguments: Record<string, any>
+	result?: string
+}): ToolMessage {
+	return {
+		id: crypto.randomUUID(),
+		role: 'tool',
+		content: toolCall.result || '',
+		timestamp: new Date(),
+		toolCall,
+	}
+}
+
+function detectToolCallInBuffer(buffer: string, toolBoundaryId: string): {
+	toolCall: { name: string; arguments: Record<string, any> } | null
+	remainingBuffer: string
+} {
+	if (!toolBoundaryId) {
+		return { toolCall: null, remainingBuffer: buffer }
+	}
+
+	const toolCall = parseToolCall(buffer, toolBoundaryId)
+	if (toolCall) {
+		// Find where the tool call ends to get remaining buffer
+		const toolCallRegex = new RegExp(
+			`\\[TOOL_CALL:${toolBoundaryId}\\](.*?)\\[\\/TOOL_CALL:${toolBoundaryId}\\]`,
+			's',
+		)
+		const match = buffer.match(toolCallRegex)
+		if (match) {
+			const remainingBuffer = buffer.slice(match.index! + match[0].length)
+			return { toolCall, remainingBuffer }
+		}
+	}
+
+	return { toolCall: null, remainingBuffer: buffer }
+}
+
+function shouldBufferContent(content: string, existingBuffer: string = ''): boolean {
+	const combined = existingBuffer + content
+	// Check if it looks like the start of a tool call but not a complete one
+	return combined.includes('[TOOL_CALL:') && !combined.includes('[/TOOL_CALL:')
+}
+
+function extractContentBeforeToolCall(content: string): { beforeToolCall: string; toolCallPart: string } {
+	const toolCallIndex = content.indexOf('[TOOL_CALL:')
+	if (toolCallIndex === -1) {
+		return { beforeToolCall: content, toolCallPart: '' }
+	}
+	return {
+		beforeToolCall: content.slice(0, toolCallIndex),
+		toolCallPart: content.slice(toolCallIndex),
+	}
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -264,13 +365,97 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 				throw new Error('Assistant message not found')
 			}
 
+			const chunk = action.payload.chunk
+			const currentBuffer = state.streamBuffer || ''
+
+			// If we're not currently buffering, check if this chunk starts a tool call
+			if (!currentBuffer) {
+				const { beforeToolCall, toolCallPart } = extractContentBeforeToolCall(chunk)
+				
+				if (toolCallPart) {
+					// Start buffering the tool call part
+					return {
+						...state,
+						streamBuffer: toolCallPart,
+						messages: state.messages.map((msg) =>
+							msg.id === state.assistantMessageId
+								? { ...msg, content: msg.content + beforeToolCall }
+								: msg,
+						),
+					}
+				} else {
+					// Normal streaming - add chunk to message content
+					return {
+						...state,
+						messages: state.messages.map((msg) =>
+							msg.id === state.assistantMessageId
+								? { ...msg, content: msg.content + chunk }
+								: msg,
+						),
+					}
+				}
+			}
+
+			// We're currently buffering - add chunk to buffer
+			const newBuffer = currentBuffer + chunk
+
+			// Check if we have a complete tool call in the buffer
+			if (state.toolBoundaryId) {
+				const { toolCall, remainingBuffer } = detectToolCallInBuffer(
+					newBuffer,
+					state.toolBoundaryId,
+				)
+
+				if (toolCall) {
+					// Found a complete tool call
+					return {
+						...state,
+						status: 'awaitingToolApproval',
+						pendingToolCall: toolCall,
+						bufferedToolContent: newBuffer.slice(0, newBuffer.length - remainingBuffer.length),
+						streamBuffer: undefined,
+						messages: state.messages.map((msg) =>
+							msg.id === state.assistantMessageId
+								? { ...msg, content: msg.content + remainingBuffer }
+								: msg,
+						),
+					}
+				}
+			}
+
+			// Check if it's clear this is not going to be a tool call
+			const hasClosing = newBuffer.includes('[/TOOL_CALL:')
+			
+			// If we have a complete tool call, it would have been handled above
+			// If we don't have closing and the buffer contains patterns that indicate it's not a tool call, flush it
+			if (!hasClosing) {
+				const afterToolCall = newBuffer.substring(newBuffer.indexOf('[TOOL_CALL:') + 11)
+				
+				// Check for patterns that indicate this is not a real tool call:
+				// 1. Contains spaces followed by lowercase words (natural language)
+				// 2. Doesn't start with a proper boundary ID format
+				// 3. Contains punctuation that wouldn't be in a tool call
+				const hasNaturalLanguage = /\s+[a-z]+/.test(afterToolCall)
+				const hasInvalidChars = /[.,!?]/.test(afterToolCall)
+				const tooLong = afterToolCall.length > 100
+				
+				if (hasNaturalLanguage || hasInvalidChars || tooLong) {
+					return {
+						...state,
+						streamBuffer: undefined,
+						messages: state.messages.map((msg) =>
+							msg.id === state.assistantMessageId
+								? { ...msg, content: msg.content + newBuffer }
+								: msg,
+						),
+					}
+				}
+			}
+
+			// Continue buffering
 			return {
 				...state,
-				messages: state.messages.map((msg) =>
-					msg.id === state.assistantMessageId
-						? { ...msg, content: msg.content + action.payload.chunk }
-						: msg,
-				),
+				streamBuffer: newBuffer,
 			}
 		}
 
@@ -292,6 +477,65 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 				...state,
 				lastError: undefined,
 			}
+
+		case 'PENDING_TOOL_CALL':
+			return {
+				...state,
+				status: 'awaitingToolApproval',
+				pendingToolCall: action.payload.toolCall,
+				bufferedToolContent: action.payload.bufferedContent,
+			}
+
+		case 'APPROVE_TOOL_CALL':
+			return {
+				...state,
+				status: 'executingTool',
+				pendingToolCall: undefined,
+				bufferedToolContent: undefined,
+			}
+
+		case 'REJECT_TOOL_CALL': {
+			const bufferedContent = state.bufferedToolContent || ''
+			return {
+				...state,
+				status: 'generating',
+				pendingToolCall: undefined,
+				bufferedToolContent: undefined,
+				messages: state.messages.map((msg) =>
+					msg.id === state.assistantMessageId
+						? { ...msg, content: msg.content + bufferedContent }
+						: msg,
+				),
+			}
+		}
+
+		case 'TOOL_EXECUTION_SUCCESS': {
+			const toolMessage = createToolMessage(action.payload.toolCall)
+			const newAssistantMessage = createAssistantMessage()
+
+			return {
+				...state,
+				status: 'generating',
+				messages: [...state.messages, toolMessage, newAssistantMessage],
+				assistantMessageId: newAssistantMessage.id,
+			}
+		}
+
+		case 'TOOL_EXECUTION_ERROR': {
+			const errorToolCall = {
+				...action.payload.toolCall,
+				result: `Error: ${action.payload.error.message}`,
+			}
+			const toolMessage = createToolMessage(errorToolCall)
+			const newAssistantMessage = createAssistantMessage()
+
+			return {
+				...state,
+				status: 'generating',
+				messages: [...state.messages, toolMessage, newAssistantMessage],
+				assistantMessageId: newAssistantMessage.id,
+			}
+		}
 
 		default:
 			return state

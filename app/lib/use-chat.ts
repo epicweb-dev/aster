@@ -8,6 +8,7 @@ import {
 } from './chat-reducer'
 import { search } from './search-engine'
 import { getErrorMessage, parseToolCall } from './utils'
+import { invokeTool } from './tools'
 
 export function useChat() {
 	const [state, dispatch] = useReducer(chatReducer, initialChatState)
@@ -42,6 +43,46 @@ export function useChat() {
 			})
 		}
 	}, [])
+
+	// Handle tool execution
+	useEffect(() => {
+		if (state.status !== 'executingTool' || !state.pendingToolCall) {
+			return
+		}
+
+		const executeTool = async () => {
+			try {
+				const toolCall = state.pendingToolCall!
+				const result = await invokeTool(toolCall.name, toolCall.arguments)
+				
+				dispatch({
+					type: 'TOOL_EXECUTION_SUCCESS',
+					payload: {
+						toolCall: {
+							id: crypto.randomUUID(),
+							name: toolCall.name,
+							arguments: toolCall.arguments,
+							result: typeof result === 'string' ? result : JSON.stringify(result),
+						},
+					},
+				})
+			} catch (error) {
+				dispatch({
+					type: 'TOOL_EXECUTION_ERROR',
+					payload: {
+						toolCall: {
+							id: crypto.randomUUID(),
+							name: state.pendingToolCall!.name,
+							arguments: state.pendingToolCall!.arguments,
+						},
+						error: error instanceof Error ? error : new Error(String(error)),
+					},
+				})
+			}
+		}
+
+		executeTool()
+	}, [state.status, state.pendingToolCall])
 
 	// Handle message generation
 	useEffect(() => {
@@ -180,11 +221,21 @@ Only call tools when necessary to help the user.`,
 		dispatch({ type: 'CLEAR_ERROR' })
 	}, [])
 
+	const approveToolCall = useCallback(() => {
+		dispatch({ type: 'APPROVE_TOOL_CALL' })
+	}, [])
+
+	const rejectToolCall = useCallback(() => {
+		dispatch({ type: 'REJECT_TOOL_CALL' })
+	}, [])
+
 	return {
 		state,
 		loadModel,
 		addMessage,
 		clearError,
+		approveToolCall,
+		rejectToolCall,
 	}
 }
 

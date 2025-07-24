@@ -485,3 +485,214 @@ describe('chatReducer', () => {
 		})
 	})
 })
+
+describe('Tool Call Functionality', () => {
+	describe('PENDING_TOOL_CALL', () => {
+		test('should store pending tool call and prevent output', () => {
+			const generatingState: ChatState = {
+				...initialChatState,
+				status: 'generating',
+				assistantMessageId: 'assistant-1',
+				messages: [
+					{
+						id: 'assistant-1',
+						role: 'assistant',
+						content: 'I need to call a tool: ',
+						timestamp: new Date(),
+					},
+				],
+			}
+
+			const action: ChatAction = {
+				type: 'PENDING_TOOL_CALL',
+				payload: {
+					toolCall: {
+						name: 'search',
+						arguments: { query: 'test' },
+					},
+					bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				},
+			}
+
+			const newState = chatReducer(generatingState, action)
+
+			expect(newState.pendingToolCall).toEqual({
+				name: 'search',
+				arguments: { query: 'test' },
+			})
+			expect(newState.bufferedToolContent).toBe('[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]')
+			expect(newState.status).toBe('awaitingToolApproval')
+			// Content should not include the tool call
+			expect(newState.messages[0].content).toBe('I need to call a tool: ')
+		})
+	})
+
+	describe('APPROVE_TOOL_CALL', () => {
+		test('should execute tool call and add tool message', () => {
+			const awaitingState: ChatState = {
+				...initialChatState,
+				status: 'awaitingToolApproval',
+				assistantMessageId: 'assistant-1',
+				messages: [
+					{
+						id: 'assistant-1',
+						role: 'assistant',
+						content: 'I need to search for information.',
+						timestamp: new Date(),
+					},
+				],
+				pendingToolCall: {
+					name: 'search',
+					arguments: { query: 'test' },
+				},
+				bufferedToolContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+			}
+
+			const action: ChatAction = {
+				type: 'APPROVE_TOOL_CALL',
+			}
+
+			const newState = chatReducer(awaitingState, action)
+
+			expect(newState.status).toBe('executingTool')
+			expect(newState.pendingToolCall).toBeUndefined()
+			expect(newState.bufferedToolContent).toBeUndefined()
+		})
+	})
+
+	describe('REJECT_TOOL_CALL', () => {
+		test('should clear pending tool call and continue generation', () => {
+			const awaitingState: ChatState = {
+				...initialChatState,
+				status: 'awaitingToolApproval',
+				assistantMessageId: 'assistant-1',
+				messages: [
+					{
+						id: 'assistant-1',
+						role: 'assistant',
+						content: 'I need to search for information.',
+						timestamp: new Date(),
+					},
+				],
+				pendingToolCall: {
+					name: 'search',
+					arguments: { query: 'test' },
+				},
+				bufferedToolContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+			}
+
+			const action: ChatAction = {
+				type: 'REJECT_TOOL_CALL',
+			}
+
+			const newState = chatReducer(awaitingState, action)
+
+			expect(newState.status).toBe('generating')
+			expect(newState.pendingToolCall).toBeUndefined()
+			expect(newState.bufferedToolContent).toBeUndefined()
+			// Should add the buffered content back to the message
+			expect(newState.messages[0].content).toBe('I need to search for information.[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]')
+		})
+	})
+
+	describe('TOOL_EXECUTION_SUCCESS', () => {
+		test('should add tool result message and start new generation', () => {
+			const executingState: ChatState = {
+				...initialChatState,
+				status: 'executingTool',
+				assistantMessageId: 'assistant-1',
+				messages: [
+					{
+						id: 'assistant-1',
+						role: 'assistant',
+						content: 'I need to search for information.',
+						timestamp: new Date(),
+					},
+				],
+			}
+
+			const action: ChatAction = {
+				type: 'TOOL_EXECUTION_SUCCESS',
+				payload: {
+					toolCall: {
+						id: 'tool-1',
+						name: 'search',
+						arguments: { query: 'test' },
+						result: 'Search results found',
+					},
+				},
+			}
+
+			const newState = chatReducer(executingState, action)
+
+			expect(newState.status).toBe('generating')
+			expect(newState.messages).toHaveLength(3)
+			expect(newState.messages[1]).toMatchObject({
+				role: 'tool',
+				content: 'Search results found',
+				toolCall: {
+					id: 'tool-1',
+					name: 'search',
+					arguments: { query: 'test' },
+					result: 'Search results found',
+				},
+			})
+			// Should create new assistant message
+			expect(newState.messages[2]).toMatchObject({
+				role: 'assistant',
+				content: '',
+			})
+			expect(newState.assistantMessageId).toBe(newState.messages[2].id)
+		})
+	})
+
+	describe('TOOL_EXECUTION_ERROR', () => {
+		test('should add tool error message and start new generation', () => {
+			const executingState: ChatState = {
+				...initialChatState,
+				status: 'executingTool',
+				assistantMessageId: 'assistant-1',
+				messages: [
+					{
+						id: 'assistant-1',
+						role: 'assistant',
+						content: 'I need to search for information.',
+						timestamp: new Date(),
+					},
+				],
+			}
+
+			const action: ChatAction = {
+				type: 'TOOL_EXECUTION_ERROR',
+				payload: {
+					toolCall: {
+						id: 'tool-1',
+						name: 'search',
+						arguments: { query: 'test' },
+					},
+					error: new Error('Tool execution failed'),
+				},
+			}
+
+			const newState = chatReducer(executingState, action)
+
+			expect(newState.status).toBe('generating')
+			expect(newState.messages).toHaveLength(3)
+			expect(newState.messages[1]).toMatchObject({
+				role: 'tool',
+				content: 'Error: Tool execution failed',
+				toolCall: {
+					id: 'tool-1',
+					name: 'search',
+					arguments: { query: 'test' },
+				},
+			})
+			// Should create new assistant message
+			expect(newState.messages[2]).toMatchObject({
+				role: 'assistant',
+				content: '',
+			})
+			expect(newState.assistantMessageId).toBe(newState.messages[2].id)
+		})
+	})
+})
