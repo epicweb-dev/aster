@@ -128,7 +128,9 @@ describe('useChat integration', () => {
 		// Continue building the tool call
 		state = chatReducer(state, {
 			type: 'STREAM_CHUNK',
-			payload: { chunk: `${state.toolBoundaryId}]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:${state.toolBoundaryId}]` },
+			payload: {
+				chunk: `${state.toolBoundaryId}]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:${state.toolBoundaryId}]`,
+			},
 		})
 
 		// Should detect complete tool call and transition to awaiting approval
@@ -171,7 +173,9 @@ describe('useChat integration', () => {
 		})
 
 		// Should flush buffer to content
-		expect(state.messages[1].content).toBe('I need to [TOOL_CALL:make a call to the API directly.')
+		expect(state.messages[1].content).toBe(
+			'I need to [TOOL_CALL:make a call to the API directly.',
+		)
 		expect(state.streamBuffer).toBeUndefined()
 	})
 
@@ -199,7 +203,8 @@ describe('useChat integration', () => {
 					name: 'search',
 					arguments: { query: 'test' },
 				},
-				bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				bufferedContent:
+					'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 			},
 		})
 

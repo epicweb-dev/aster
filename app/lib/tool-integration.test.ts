@@ -18,7 +18,7 @@ vi.mock('./tools', () => ({
 describe('Tool Call Integration', () => {
 	test('complete tool call workflow from streaming to execution', async () => {
 		consoleLog.mockImplementation(() => {})
-		
+
 		let state = initialChatState
 
 		// Set up ready state with engine
@@ -43,7 +43,9 @@ describe('Tool Call Integration', () => {
 			payload: { chunk: 'I can help you search for that information. ' },
 		})
 
-		expect(state.messages[1].content).toBe('I can help you search for that information. ')
+		expect(state.messages[1].content).toBe(
+			'I can help you search for that information. ',
+		)
 
 		// Stream the beginning of a tool call
 		state = chatReducer(state, {
@@ -52,14 +54,16 @@ describe('Tool Call Integration', () => {
 		})
 
 		expect(state.streamBuffer).toBe('[TOOL_CALL:')
-		expect(state.messages[1].content).toBe('I can help you search for that information. ')
+		expect(state.messages[1].content).toBe(
+			'I can help you search for that information. ',
+		)
 
 		// Complete the tool call
 		const toolBoundaryId = state.toolBoundaryId!
 		state = chatReducer(state, {
 			type: 'STREAM_CHUNK',
-			payload: { 
-				chunk: `${toolBoundaryId}]{"name": "search", "arguments": {"query": "React hooks"}}[/TOOL_CALL:${toolBoundaryId}]`
+			payload: {
+				chunk: `${toolBoundaryId}]{"name": "search", "arguments": {"query": "React hooks"}}[/TOOL_CALL:${toolBoundaryId}]`,
 			},
 		})
 
@@ -123,10 +127,15 @@ describe('Tool Call Integration', () => {
 		// Complete the response
 		state = chatReducer(state, {
 			type: 'STREAM_CHUNK',
-			payload: { chunk: 'React hooks are functions that let you use state and other React features.' },
+			payload: {
+				chunk:
+					'React hooks are functions that let you use state and other React features.',
+			},
 		})
 
-		expect(state.messages[3].content).toBe('Based on the search results, React hooks are functions that let you use state and other React features.')
+		expect(state.messages[3].content).toBe(
+			'Based on the search results, React hooks are functions that let you use state and other React features.',
+		)
 
 		// Mark generation complete
 		state = chatReducer(state, {
@@ -158,7 +167,8 @@ describe('Tool Call Integration', () => {
 					name: 'calculate',
 					arguments: { expression: '2 + 2' },
 				},
-				bufferedContent: '[TOOL_CALL:123]{"name": "calculate", "arguments": {"expression": "2 + 2"}}[/TOOL_CALL:123]',
+				bufferedContent:
+					'[TOOL_CALL:123]{"name": "calculate", "arguments": {"expression": "2 + 2"}}[/TOOL_CALL:123]',
 			},
 		})
 
@@ -172,7 +182,9 @@ describe('Tool Call Integration', () => {
 		// Should return to generating and add buffered content back
 		expect(state.status).toBe('generating')
 		expect(state.pendingToolCall).toBeUndefined()
-		expect(state.messages[1].content).toBe('[TOOL_CALL:123]{"name": "calculate", "arguments": {"expression": "2 + 2"}}[/TOOL_CALL:123]')
+		expect(state.messages[1].content).toBe(
+			'[TOOL_CALL:123]{"name": "calculate", "arguments": {"expression": "2 + 2"}}[/TOOL_CALL:123]',
+		)
 	})
 
 	test('multiple tool calls in sequence', () => {
@@ -197,7 +209,8 @@ describe('Tool Call Integration', () => {
 					name: 'search',
 					arguments: { query: 'test' },
 				},
-				bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				bufferedContent:
+					'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 			},
 		})
 
@@ -227,7 +240,8 @@ describe('Tool Call Integration', () => {
 					name: 'calculate',
 					arguments: { expression: '5 * 5' },
 				},
-				bufferedContent: '[TOOL_CALL:124]{"name": "calculate", "arguments": {"expression": "5 * 5"}}[/TOOL_CALL:124]',
+				bufferedContent:
+					'[TOOL_CALL:124]{"name": "calculate", "arguments": {"expression": "5 * 5"}}[/TOOL_CALL:124]',
 			},
 		})
 

@@ -54,7 +54,7 @@ export function useChat() {
 			try {
 				const toolCall = state.pendingToolCall!
 				const result = await invokeTool(toolCall.name, toolCall.arguments)
-				
+
 				dispatch({
 					type: 'TOOL_EXECUTION_SUCCESS',
 					payload: {
@@ -62,7 +62,8 @@ export function useChat() {
 							id: crypto.randomUUID(),
 							name: toolCall.name,
 							arguments: toolCall.arguments,
-							result: typeof result === 'string' ? result : JSON.stringify(result),
+							result:
+								typeof result === 'string' ? result : JSON.stringify(result),
 						},
 					},
 				})

@@ -510,7 +510,8 @@ describe('Tool Call Functionality', () => {
 						name: 'search',
 						arguments: { query: 'test' },
 					},
-					bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+					bufferedContent:
+						'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 				},
 			}
 
@@ -520,7 +521,9 @@ describe('Tool Call Functionality', () => {
 				name: 'search',
 				arguments: { query: 'test' },
 			})
-			expect(newState.bufferedToolContent).toBe('[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]')
+			expect(newState.bufferedToolContent).toBe(
+				'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+			)
 			expect(newState.status).toBe('awaitingToolApproval')
 			// Content should not include the tool call
 			expect(newState.messages[0].content).toBe('I need to call a tool: ')
@@ -545,7 +548,8 @@ describe('Tool Call Functionality', () => {
 					name: 'search',
 					arguments: { query: 'test' },
 				},
-				bufferedToolContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				bufferedToolContent:
+					'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 			}
 
 			const action: ChatAction = {
@@ -578,7 +582,8 @@ describe('Tool Call Functionality', () => {
 					name: 'search',
 					arguments: { query: 'test' },
 				},
-				bufferedToolContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				bufferedToolContent:
+					'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 			}
 
 			const action: ChatAction = {
@@ -591,7 +596,9 @@ describe('Tool Call Functionality', () => {
 			expect(newState.pendingToolCall).toBeUndefined()
 			expect(newState.bufferedToolContent).toBeUndefined()
 			// Should add the buffered content back to the message
-			expect(newState.messages[0].content).toBe('I need to search for information.[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]')
+			expect(newState.messages[0].content).toBe(
+				'I need to search for information.[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+			)
 		})
 	})
 

@@ -27,7 +27,13 @@ export type Message =
 	| SystemMessage
 	| ToolMessage
 
-export type ChatStatus = 'idle' | 'loadingModel' | 'ready' | 'generating' | 'awaitingToolApproval' | 'executingTool'
+export type ChatStatus =
+	| 'idle'
+	| 'loadingModel'
+	| 'ready'
+	| 'generating'
+	| 'awaitingToolApproval'
+	| 'executingTool'
 
 export type ChatState = {
 	status: ChatStatus
@@ -223,7 +229,10 @@ function createToolMessage(toolCall: {
 	}
 }
 
-function detectToolCallInBuffer(buffer: string, toolBoundaryId: string): {
+function detectToolCallInBuffer(
+	buffer: string,
+	toolBoundaryId: string,
+): {
 	toolCall: { name: string; arguments: Record<string, any> } | null
 	remainingBuffer: string
 } {
@@ -248,13 +257,19 @@ function detectToolCallInBuffer(buffer: string, toolBoundaryId: string): {
 	return { toolCall: null, remainingBuffer: buffer }
 }
 
-function shouldBufferContent(content: string, existingBuffer: string = ''): boolean {
+function shouldBufferContent(
+	content: string,
+	existingBuffer: string = '',
+): boolean {
 	const combined = existingBuffer + content
 	// Check if it looks like the start of a tool call but not a complete one
 	return combined.includes('[TOOL_CALL:') && !combined.includes('[/TOOL_CALL:')
 }
 
-function extractContentBeforeToolCall(content: string): { beforeToolCall: string; toolCallPart: string } {
+function extractContentBeforeToolCall(content: string): {
+	beforeToolCall: string
+	toolCallPart: string
+} {
 	const toolCallIndex = content.indexOf('[TOOL_CALL:')
 	if (toolCallIndex === -1) {
 		return { beforeToolCall: content, toolCallPart: '' }
@@ -370,8 +385,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
 			// If we're not currently buffering, check if this chunk starts a tool call
 			if (!currentBuffer) {
-				const { beforeToolCall, toolCallPart } = extractContentBeforeToolCall(chunk)
-				
+				const { beforeToolCall, toolCallPart } =
+					extractContentBeforeToolCall(chunk)
+
 				if (toolCallPart) {
 					// Start buffering the tool call part
 					return {
@@ -412,7 +428,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 						...state,
 						status: 'awaitingToolApproval',
 						pendingToolCall: toolCall,
-						bufferedToolContent: newBuffer.slice(0, newBuffer.length - remainingBuffer.length),
+						bufferedToolContent: newBuffer.slice(
+							0,
+							newBuffer.length - remainingBuffer.length,
+						),
 						streamBuffer: undefined,
 						messages: state.messages.map((msg) =>
 							msg.id === state.assistantMessageId
@@ -425,12 +444,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
 			// Check if it's clear this is not going to be a tool call
 			const hasClosing = newBuffer.includes('[/TOOL_CALL:')
-			
+
 			// If we have a complete tool call, it would have been handled above
 			// If we don't have closing and the buffer contains patterns that indicate it's not a tool call, flush it
 			if (!hasClosing) {
-				const afterToolCall = newBuffer.substring(newBuffer.indexOf('[TOOL_CALL:') + 11)
-				
+				const afterToolCall = newBuffer.substring(
+					newBuffer.indexOf('[TOOL_CALL:') + 11,
+				)
+
 				// Check for patterns that indicate this is not a real tool call:
 				// 1. Contains spaces followed by lowercase words (natural language)
 				// 2. Doesn't start with a proper boundary ID format
@@ -438,7 +459,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 				const hasNaturalLanguage = /\s+[a-z]+/.test(afterToolCall)
 				const hasInvalidChars = /[.,!?]/.test(afterToolCall)
 				const tooLong = afterToolCall.length > 100
-				
+
 				if (hasNaturalLanguage || hasInvalidChars || tooLong) {
 					return {
 						...state,
