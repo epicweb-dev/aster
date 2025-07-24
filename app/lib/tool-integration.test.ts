@@ -34,6 +34,9 @@ describe('Tool Call Integration', () => {
 			payload: { content: 'Please search for information about React hooks' },
 		})
 
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
+
 		expect(state.status).toBe('generating')
 		expect(state.messages).toHaveLength(2) // user + assistant
 
@@ -159,6 +162,9 @@ describe('Tool Call Integration', () => {
 			payload: { content: 'Calculate something' },
 		})
 
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
+
 		// Simulate pending tool call
 		state = chatReducer(state, {
 			type: 'PENDING_TOOL_CALL',
@@ -202,6 +208,9 @@ describe('Tool Call Integration', () => {
 			type: 'ADD_MESSAGE',
 			payload: { content: 'Search and calculate' },
 		})
+
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
 
 		// First tool call - search
 		state = chatReducer(state, {

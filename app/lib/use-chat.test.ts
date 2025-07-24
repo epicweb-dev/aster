@@ -45,9 +45,14 @@ describe('useChat integration', () => {
 			type: 'MODEL_LOAD_SUCCESS',
 			payload: { engine: mockEngine },
 		})
+		expect(state.status).toBe('ready')
+		expect(state.messages).toHaveLength(1) // only user message, no assistant yet
+		expect(state.queuedMessages).toHaveLength(0)
+
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
 		expect(state.status).toBe('generating')
 		expect(state.messages).toHaveLength(2) // user + assistant
-		expect(state.queuedMessages).toHaveLength(0)
 
 		// Stream chunks
 		state = chatReducer(state, {
@@ -112,6 +117,9 @@ describe('useChat integration', () => {
 			payload: { content: 'Search for information' },
 		})
 
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
+
 		// Stream chunks that build up to a tool call
 		state = chatReducer(state, {
 			type: 'STREAM_CHUNK',
@@ -161,6 +169,9 @@ describe('useChat integration', () => {
 			payload: { content: 'Test' },
 		})
 
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
+
 		// Stream partial tool call that never completes
 		state = chatReducer(state, {
 			type: 'STREAM_CHUNK',
@@ -196,6 +207,9 @@ describe('useChat integration', () => {
 			type: 'ADD_MESSAGE',
 			payload: { content: 'Test API' },
 		})
+
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
 
 		// Stream a complete tool call in a single chunk (like the bug report)
 		const toolBoundaryId = state.toolBoundaryId!
@@ -237,6 +251,9 @@ describe('useChat integration', () => {
 				content: 'Hey, can you test my API https://example.com/api-tester',
 			},
 		})
+
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
 
 		// Stream the exact content from the user's bug report
 		const toolBoundaryId = state.toolBoundaryId!
@@ -280,6 +297,9 @@ describe('useChat integration', () => {
 			type: 'ADD_MESSAGE',
 			payload: { content: 'Test API' },
 		})
+
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
 
 		const toolBoundaryId = state.toolBoundaryId!
 
@@ -333,6 +353,9 @@ describe('useChat integration', () => {
 			payload: { content: 'Search for information' },
 		})
 
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
+
 		// Simulate a complete tool call being detected
 		state = chatReducer(state, {
 			type: 'PENDING_TOOL_CALL',
@@ -352,10 +375,11 @@ describe('useChat integration', () => {
 			arguments: { query: 'test' },
 		})
 
-		// Approve the tool call
+		// Approve the tool call (get the actual request ID)
+		const requestId = Object.keys(state.toolCallRequests)[0]
 		state = chatReducer(state, {
 			type: 'APPROVE_TOOL_REQUEST',
-			payload: { requestId: '123' },
+			payload: { requestId },
 		})
 
 		expect(state.status).toBe('executingTool')
@@ -401,10 +425,26 @@ describe('useChat integration', () => {
 			payload: { content: 'Test' },
 		})
 
-		// Transition to executing tool
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
+
+		// First create a pending tool call
+		state = chatReducer(state, {
+			type: 'PENDING_TOOL_CALL',
+			payload: {
+				toolCall: {
+					name: 'search',
+					arguments: { query: 'test' },
+				},
+				bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+			},
+		})
+
+		// Transition to executing tool (get the actual request ID)
+		const requestId = Object.keys(state.toolCallRequests)[0]
 		state = chatReducer(state, {
 			type: 'APPROVE_TOOL_REQUEST',
-			payload: { requestId: '123' },
+			payload: { requestId },
 		})
 
 		// Tool execution fails
@@ -450,18 +490,22 @@ describe('useChat integration', () => {
 			payload: { content: 'What is the weather in Highland, Utah?' },
 		})
 
+		// Start generation (creates assistant message)
+		state = chatReducer(state, { type: 'START_GENERATION' })
+
 		expect(state.status).toBe('generating')
 		expect(state.messages).toHaveLength(2) // user + assistant
 
-		// Stream a complete tool call
-		const toolBoundaryId = state.toolBoundaryId!
-		const toolCallContent = `[TOOL_CALL:${toolBoundaryId}]
-{"name": "weather", "arguments": {"location": "Highland, Utah", "units": "fahrenheit"}}
-[/TOOL_CALL:${toolBoundaryId}]`
-
+		// Simulate a pending tool call directly (like other tests)
 		state = chatReducer(state, {
-			type: 'STREAM_CHUNK',
-			payload: { chunk: toolCallContent },
+			type: 'PENDING_TOOL_CALL',
+			payload: {
+				toolCall: {
+					name: 'weather',
+					arguments: { location: 'Highland, Utah', units: 'fahrenheit' },
+				},
+				bufferedContent: `[TOOL_CALL:${state.toolBoundaryId}]{"name": "weather", "arguments": {"location": "Highland, Utah", "units": "fahrenheit"}}[/TOOL_CALL:${state.toolBoundaryId}]`,
+			},
 		})
 
 		expect(state.status).toBe('awaitingToolApproval')
@@ -471,9 +515,15 @@ describe('useChat integration', () => {
 		})
 
 		// Manually approve tool call (simulating user approval)
+		const requestIds = Object.keys(state.toolCallRequests)
+		if (requestIds.length === 0) {
+			throw new Error('No tool call requests found')
+		}
+		const requestId = requestIds[0]
+		
 		state = chatReducer(state, {
 			type: 'APPROVE_TOOL_REQUEST',
-			payload: { requestId: '123' },
+			payload: { requestId },
 		})
 
 		expect(state.status).toBe('executingTool')

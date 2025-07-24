@@ -82,21 +82,17 @@ describe('chatReducer', () => {
 
 			const newState = chatReducer(loadingState, action)
 
-			// When there are queued messages, it should start generation immediately
-			expect(newState.status).toBe('generating')
+			// When there are queued messages, it should process them and set status to ready
+			expect(newState.status).toBe('ready')
 			expect(newState.engine).toBe(mockEngine)
 			expect(newState.modelLoadProgress).toEqual({
 				status: 'success',
 				value: 1,
 			})
-			expect(newState.messages).toHaveLength(2) // user message + assistant message
+			expect(newState.messages).toHaveLength(1) // only user message, no assistant message created yet
 			expect(newState.messages[0]).toMatchObject({
 				role: 'user',
 				content: 'Hello',
-			})
-			expect(newState.messages[1]).toMatchObject({
-				role: 'assistant',
-				content: '',
 			})
 			expect(newState.queuedMessages).toHaveLength(0)
 			expect(newState.lastError).toBeUndefined()
@@ -195,18 +191,13 @@ describe('chatReducer', () => {
 
 			const newState = chatReducer(readyState, action)
 
-			expect(newState.status).toBe('generating')
-			expect(newState.messages).toHaveLength(2) // user message + assistant message
+			expect(newState.status).toBe('ready')
+			expect(newState.messages).toHaveLength(1) // only user message, no assistant message created yet
 			expect(newState.messages[0]).toMatchObject({
 				role: 'user',
 				content: 'Hello world',
 			})
-			expect(newState.messages[1]).toMatchObject({
-				role: 'assistant',
-				content: '',
-				id: expect.any(String),
-			})
-			expect(newState.assistantMessageId).toBe(newState.messages[1].id)
+			expect(newState.assistantMessageId).toBeUndefined()
 		})
 	})
 
@@ -391,9 +382,9 @@ describe('chatReducer', () => {
 
 			const newState = chatReducer(readyStateWithQueue, action)
 
-			expect(newState.status).toBe('generating')
+			expect(newState.status).toBe('ready')
 			expect(newState.queuedMessages).toHaveLength(0)
-			expect(newState.messages).toHaveLength(3) // queued + new + assistant
+			expect(newState.messages).toHaveLength(2) // queued + new, no assistant message yet
 			expect(newState.messages[0]).toMatchObject({
 				role: 'user',
 				content: 'Queued message',
@@ -401,10 +392,6 @@ describe('chatReducer', () => {
 			expect(newState.messages[1]).toMatchObject({
 				role: 'user',
 				content: 'New message',
-			})
-			expect(newState.messages[2]).toMatchObject({
-				role: 'assistant',
-				content: '',
 			})
 		})
 
@@ -443,18 +430,14 @@ describe('chatReducer', () => {
 
 			const newState = chatReducer(generatingStateWithQueue, action)
 
-			expect(newState.status).toBe('generating') // Should start generation again
+			expect(newState.status).toBe('ready') // Should return to ready, let calling code trigger generation
 			expect(newState.queuedMessages).toHaveLength(0)
-			expect(newState.messages).toHaveLength(4) // original 2 + queued + new assistant
+			expect(newState.messages).toHaveLength(3) // original 2 + queued, no new assistant message yet
 			expect(newState.messages[2]).toMatchObject({
 				role: 'user',
 				content: 'Queued message',
 			})
-			expect(newState.messages[3]).toMatchObject({
-				role: 'assistant',
-				content: '',
-			})
-			expect(newState.assistantMessageId).toBe(newState.messages[3].id)
+			expect(newState.assistantMessageId).toBeUndefined()
 		})
 
 		test('should return to ready state when no queued messages after GENERATION_COMPLETE', () => {
@@ -530,47 +513,57 @@ describe('Tool Call Functionality', () => {
 		})
 	})
 
-	describe('APPROVE_TOOL_CALL', () => {
-		test('should execute tool call and add tool message', () => {
-			const awaitingState: ChatState = {
+	describe('APPROVE_TOOL_REQUEST', () => {
+		test('should approve tool request and set executing status', () => {
+			const stateWithToolRequest: ChatState = {
 				...initialChatState,
 				status: 'awaitingToolApproval',
 				assistantMessageId: 'assistant-1',
-				messages: [
-					{
-						id: 'assistant-1',
-						role: 'assistant',
-						content: 'I need to search for information.',
-						timestamp: new Date(),
-					},
-				],
+				currentToolRequestId: 'request-123',
+				toolCallRequests: {
+					'request-123': {
+						id: 'request-123',
+						assistantMessageId: 'assistant-1',
+						toolCall: { name: 'search', arguments: { query: 'test' } },
+						bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+						status: 'pending'
+					}
+				},
 				pendingToolCall: {
 					name: 'search',
 					arguments: { query: 'test' },
 				},
-				bufferedToolContent:
-					'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				bufferedToolContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 			}
 
 			const action: ChatAction = {
 				type: 'APPROVE_TOOL_REQUEST',
-				payload: { requestId: '123' },
+				payload: { requestId: 'request-123' },
 			}
 
-			const newState = chatReducer(awaitingState, action)
+			const newState = chatReducer(stateWithToolRequest, action)
 
 			expect(newState.status).toBe('executingTool')
-			expect(newState.pendingToolCall).toBeUndefined()
-			expect(newState.bufferedToolContent).toBeUndefined()
+			expect(newState.toolCallRequests['request-123'].status).toBe('executing')
 		})
 	})
 
-	describe('REJECT_TOOL_CALL', () => {
-		test('should clear pending tool call and continue generation', () => {
-			const awaitingState: ChatState = {
+	describe('REJECT_TOOL_REQUEST', () => {
+		test('should reject tool request and return to generating', () => {
+			const stateWithToolRequest: ChatState = {
 				...initialChatState,
 				status: 'awaitingToolApproval',
 				assistantMessageId: 'assistant-1',
+				currentToolRequestId: 'request-123',
+				toolCallRequests: {
+					'request-123': {
+						id: 'request-123',
+						assistantMessageId: 'assistant-1',
+						toolCall: { name: 'search', arguments: { query: 'test' } },
+						bufferedContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+						status: 'pending'
+					}
+				},
 				messages: [
 					{
 						id: 'assistant-1',
@@ -583,20 +576,20 @@ describe('Tool Call Functionality', () => {
 					name: 'search',
 					arguments: { query: 'test' },
 				},
-				bufferedToolContent:
-					'[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
+				bufferedToolContent: '[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',
 			}
 
 			const action: ChatAction = {
 				type: 'REJECT_TOOL_REQUEST',
-				payload: { requestId: '123' },
+				payload: { requestId: 'request-123' },
 			}
 
-			const newState = chatReducer(awaitingState, action)
+			const newState = chatReducer(stateWithToolRequest, action)
 
 			expect(newState.status).toBe('generating')
 			expect(newState.pendingToolCall).toBeUndefined()
 			expect(newState.bufferedToolContent).toBeUndefined()
+			expect(newState.toolCallRequests['request-123'].status).toBe('rejected')
 			// Should add the buffered content back to the message
 			expect(newState.messages[0].content).toBe(
 				'I need to search for information.[TOOL_CALL:123]{"name": "search", "arguments": {"query": "test"}}[/TOOL_CALL:123]',

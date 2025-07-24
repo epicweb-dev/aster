@@ -777,7 +777,8 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 			return {
 				...state,
 				status: 'executingTool',
-				pendingToolCall: request.toolCall,
+				pendingToolCall: undefined,
+				bufferedToolContent: undefined,
 				currentToolRequestId: action.payload.requestId,
 				toolCallRequests: {
 					...state.toolCallRequests,
@@ -795,9 +796,19 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 				return state
 			}
 
+			// Add buffered content back to the assistant message
+			const updatedMessages = state.messages.map((msg) =>
+				msg.id === state.assistantMessageId
+					? { ...msg, content: msg.content + (state.bufferedToolContent || '') }
+					: msg,
+			)
+
 			return {
 				...state,
 				status: 'generating',
+				pendingToolCall: undefined,
+				bufferedToolContent: undefined,
+				messages: updatedMessages,
 				toolCallRequests: {
 					...state.toolCallRequests,
 					[action.payload.requestId]: {
