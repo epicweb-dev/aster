@@ -140,6 +140,26 @@ function startGeneration(state: ChatState): ChatState {
 	}
 }
 
+function transitionToReady(state: ChatState): ChatState {
+	// First process any queued messages
+	const processedState = processQueuedMessages({
+		...state,
+		status: 'ready',
+		assistantMessageId: undefined,
+	})
+
+	// If there are messages after processing queue, start generation
+	if (processedState.queuedMessages.length === 0 && processedState.messages.length > 0) {
+		// Check if the last message is from user or tool (indicating we need to generate a response)
+		const lastMessage = processedState.messages[processedState.messages.length - 1]
+		if (lastMessage.role === 'user' || lastMessage.role === 'tool') {
+			return startGeneration(processedState)
+		}
+	}
+
+	return processedState
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 	switch (action.type) {
 		case 'LOAD_MODEL':
@@ -213,10 +233,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 			}
 
 			if (state.status === 'ready') {
-				// Add message and start generation
+				// Process any queued messages first, then add new message and start generation
+				const processedState = processQueuedMessages(state)
 				return startGeneration({
-					...state,
-					messages: [...state.messages, userMessage],
+					...processedState,
+					messages: [...processedState.messages, userMessage],
 				})
 			}
 
