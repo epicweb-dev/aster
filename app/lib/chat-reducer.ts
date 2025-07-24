@@ -611,15 +611,15 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 				)
 
 				if (toolCall) {
-					// Found a complete tool call
-					return {
+					// Found a complete tool call - dispatch PENDING_TOOL_CALL action
+					const bufferedContent = newBuffer.slice(
+						0,
+						newBuffer.length - remainingBuffer.length,
+					)
+
+					// First update the message content with remaining buffer
+					const updatedState = {
 						...state,
-						status: 'awaitingToolApproval',
-						pendingToolCall: toolCall,
-						bufferedToolContent: newBuffer.slice(
-							0,
-							newBuffer.length - remainingBuffer.length,
-						),
 						streamBuffer: undefined,
 						messages: state.messages.map((msg) =>
 							msg.id === state.assistantMessageId
@@ -627,6 +627,15 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 								: msg,
 						),
 					}
+
+					// Then dispatch PENDING_TOOL_CALL action
+					return chatReducerImpl(updatedState, {
+						type: 'PENDING_TOOL_CALL',
+						payload: {
+							toolCall,
+							bufferedContent,
+						},
+					})
 				}
 			}
 
