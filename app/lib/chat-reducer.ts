@@ -149,9 +149,13 @@ function transitionToReady(state: ChatState): ChatState {
 	})
 
 	// If there are messages after processing queue, start generation
-	if (processedState.queuedMessages.length === 0 && processedState.messages.length > 0) {
+	if (
+		processedState.queuedMessages.length === 0 &&
+		processedState.messages.length > 0
+	) {
 		// Check if the last message is from user or tool (indicating we need to generate a response)
-		const lastMessage = processedState.messages[processedState.messages.length - 1]
+		const lastMessage =
+			processedState.messages[processedState.messages.length - 1]
 		if (lastMessage.role === 'user' || lastMessage.role === 'tool') {
 			return startGeneration(processedState)
 		}
