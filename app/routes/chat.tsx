@@ -1,15 +1,33 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useChat } from '../lib/use-chat'
 import { useAutoScroll } from '../lib/use-autoscroll'
 
 export default function ChatNew() {
 	const { state, loadModel, addMessage, clearError } = useChat()
 	const { containerRef, scrollTargetRef } = useAutoScroll()
+	const inputRef = useRef<HTMLInputElement>(null)
 
 	// Load model on mount
 	useEffect(() => {
 		loadModel('Llama-3.1-8B-Instruct-q4f32_1-MLC')
 	}, [loadModel])
+
+	// Focus input after hydration and when status changes
+	useEffect(() => {
+		if (inputRef.current && state.status !== 'idle') {
+			inputRef.current.focus()
+		}
+	}, [state.status])
+
+	// Focus input on mount (after hydration)
+	useEffect(() => {
+		const timer = setTimeout(() => {
+			if (inputRef.current) {
+				inputRef.current.focus()
+			}
+		}, 100)
+		return () => clearTimeout(timer)
+	}, [])
 
 	// Handle form submission
 	function handleSubmit(e: React.FormEvent) {
@@ -21,6 +39,12 @@ export default function ChatNew() {
 		if (message) {
 			addMessage(message)
 			form.reset()
+			// Refocus input after sending message
+			setTimeout(() => {
+				if (inputRef.current) {
+					inputRef.current.focus()
+				}
+			}, 0)
 		}
 	}
 
@@ -193,6 +217,7 @@ export default function ChatNew() {
 				<form onSubmit={handleSubmit} className="flex space-x-4">
 					<div className="flex-1">
 						<input
+							ref={inputRef}
 							autoFocus
 							type="text"
 							name="message"
