@@ -26,6 +26,7 @@ export default defineConfig({
 		devtoolsJson(),
 	],
 	test: {
+		environment: 'jsdom',
 		restoreMocks: true,
 		setupFiles: ['./tests/test-setup.ts'],
 		reporters: ['default', 'hanging-process'],
