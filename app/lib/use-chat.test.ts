@@ -435,36 +435,40 @@ describe('useChat integration', () => {
 
 		let state = { ...initialChatState, logLevel: 'debug' as const }
 
-		// Set up generating state
+		// Set up ready state with engine
 		const mockEngine = { mock: 'engine' } as any
 		state = chatReducer(state, {
 			type: 'MODEL_LOAD_SUCCESS',
 			payload: { engine: mockEngine },
 		})
 
+		// Add message to start generation
 		state = chatReducer(state, {
 			type: 'ADD_MESSAGE',
-			payload: { content: 'What is the weather?' },
+			payload: { content: 'What is the weather in Highland, Utah?' },
 		})
 
-		// Simulate a tool call being detected
-		const toolCall = {
-			name: 'weather',
-			arguments: { location: 'Highland, Utah' },
-		}
+		expect(state.status).toBe('generating')
+		expect(state.messages).toHaveLength(2) // user + assistant
+
+		// Stream a complete tool call
+		const toolBoundaryId = state.toolBoundaryId!
+		const toolCallContent = `[TOOL_CALL:${toolBoundaryId}]
+{"name": "weather", "arguments": {"location": "Highland, Utah", "units": "fahrenheit"}}
+[/TOOL_CALL:${toolBoundaryId}]`
 
 		state = chatReducer(state, {
-			type: 'PENDING_TOOL_CALL',
-			payload: {
-				toolCall,
-				bufferedContent: `[TOOL_CALL:${state.toolBoundaryId}]\n{"name": "weather", "arguments": {"location": "Highland, Utah"}}\n[/TOOL_CALL:${state.toolBoundaryId}]`,
-			},
+			type: 'STREAM_CHUNK',
+			payload: { chunk: toolCallContent },
 		})
 
 		expect(state.status).toBe('awaitingToolApproval')
-		expect(state.pendingToolCall).toEqual(toolCall)
+		expect(state.pendingToolCall).toEqual({
+			name: 'weather',
+			arguments: { location: 'Highland, Utah', units: 'fahrenheit' },
+		})
 
-		// Approve the tool call
+		// Manually approve tool call (simulating user approval)
 		state = chatReducer(state, {
 			type: 'APPROVE_TOOL_CALL',
 		})

@@ -134,8 +134,14 @@ export function useChat() {
 				const messagesForCompletion =
 					removeMessagesAfterLastUserOrToolMessage(messages)
 
+				// Update status to searching
+				dispatch({ type: 'SET_STATUS', payload: { status: 'searching' } })
+
 				// Search for relevant tools
 				const searchResults = await search(messagesForCompletion)
+
+				// Update status back to generating
+				dispatch({ type: 'SET_STATUS', payload: { status: 'generating' } })
 				const tools = searchResults.map((tool) => ({
 					id: tool.id,
 					llmDescription: tool.llmDescription,

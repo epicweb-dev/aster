@@ -32,6 +32,7 @@ export type ChatStatus =
 	| 'idle'
 	| 'loadingModel'
 	| 'ready'
+	| 'searching'
 	| 'generating'
 	| 'awaitingToolApproval'
 	| 'executingTool'
@@ -170,6 +171,10 @@ export type ChatAction =
 			type: 'REJECT_TOOL_REQUEST'
 			payload: { requestId: string }
 	  }
+	| {
+			type: 'SET_STATUS'
+			payload: { status: ChatStatus }
+	  }
 
 export const initialChatState: ChatState = {
 	status: 'idle',
@@ -180,7 +185,7 @@ export const initialChatState: ChatState = {
 	},
 	messages: [],
 	queuedMessages: [],
-	logLevel: 'debug',
+	logLevel: 'silent',
 	toolCallRequests: {},
 }
 
@@ -611,31 +616,39 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 				)
 
 				if (toolCall) {
-					// Found a complete tool call - dispatch PENDING_TOOL_CALL action
+					// Found a complete tool call - handle directly without recursive call
 					const bufferedContent = newBuffer.slice(
 						0,
 						newBuffer.length - remainingBuffer.length,
 					)
 
-					// First update the message content with remaining buffer
-					const updatedState = {
+					// Create tool call request
+					const requestId = crypto.randomUUID()
+					const toolCallRequest: ToolCallRequest = {
+						id: requestId,
+						assistantMessageId: state.assistantMessageId!,
+						toolCall,
+						bufferedContent,
+						status: 'pending',
+					}
+
+					return {
 						...state,
+						status: 'awaitingToolApproval',
+						pendingToolCall: toolCall,
+						bufferedToolContent: bufferedContent,
+						currentToolRequestId: requestId,
 						streamBuffer: undefined,
+						toolCallRequests: {
+							...state.toolCallRequests,
+							[requestId]: toolCallRequest,
+						},
 						messages: state.messages.map((msg) =>
 							msg.id === state.assistantMessageId
 								? { ...msg, content: msg.content + remainingBuffer }
 								: msg,
 						),
 					}
-
-					// Then dispatch PENDING_TOOL_CALL action
-					return chatReducerImpl(updatedState, {
-						type: 'PENDING_TOOL_CALL',
-						payload: {
-							toolCall,
-							bufferedContent,
-						},
-					})
 				}
 			}
 
@@ -843,6 +856,12 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 				},
 			}
 		}
+
+		case 'SET_STATUS':
+			return {
+				...state,
+				status: action.payload.status,
+			}
 
 		default:
 			return state
