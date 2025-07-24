@@ -175,8 +175,10 @@ describe('Tool Call Integration', () => {
 		expect(state.status).toBe('awaitingToolApproval')
 
 		// User rejects the tool call
+		const rejectionRequestId = Object.keys(state.toolCallRequests)[0]
 		state = chatReducer(state, {
-			type: 'REJECT_TOOL_CALL',
+			type: 'REJECT_TOOL_REQUEST',
+			payload: { requestId: rejectionRequestId },
 		})
 
 		// Should return to generating and add buffered content back
@@ -214,7 +216,12 @@ describe('Tool Call Integration', () => {
 			},
 		})
 
-		state = chatReducer(state, { type: 'APPROVE_TOOL_CALL' })
+		// Get the request ID from the created tool call request
+		const requestId1 = Object.keys(state.toolCallRequests)[0]
+		state = chatReducer(state, {
+			type: 'APPROVE_TOOL_REQUEST',
+			payload: { requestId: requestId1 },
+		})
 
 		state = chatReducer(state, {
 			type: 'TOOL_EXECUTION_SUCCESS',
@@ -245,7 +252,13 @@ describe('Tool Call Integration', () => {
 			},
 		})
 
-		state = chatReducer(state, { type: 'APPROVE_TOOL_CALL' })
+		// Get the request ID from the created tool call request (second one)
+		const requestIds = Object.keys(state.toolCallRequests)
+		const requestId2 = requestIds[requestIds.length - 1] // Get the latest request
+		state = chatReducer(state, {
+			type: 'APPROVE_TOOL_REQUEST',
+			payload: { requestId: requestId2 },
+		})
 
 		state = chatReducer(state, {
 			type: 'TOOL_EXECUTION_SUCCESS',

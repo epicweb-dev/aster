@@ -41,6 +41,9 @@ export function useChat() {
 
 			engineRef.current = engine
 			dispatch({ type: 'MODEL_LOAD_SUCCESS', payload: { engine } })
+
+			// After model loads, trigger generation if needed
+			setTimeout(() => generateResponse(), 0)
 		} catch (error) {
 			dispatch({
 				type: 'MODEL_LOAD_ERROR',
@@ -108,8 +111,17 @@ export function useChat() {
 	)
 
 	const generateResponse = useCallback(async () => {
-		if (!state.engine) {
-			console.warn('cannot generate response: no engine')
+		if (!state.engine || state.status !== 'ready') {
+			return
+		}
+
+		// Check if we need to generate (have messages from user/tool or queued messages)
+		const hasQueuedMessages = state.queuedMessages.length > 0
+		const lastMessage = state.messages[state.messages.length - 1]
+		const needsResponse =
+			lastMessage && ['user', 'tool'].includes(lastMessage.role)
+
+		if (!hasQueuedMessages && !needsResponse) {
 			return
 		}
 
