@@ -96,7 +96,7 @@ function Chat() {
 							onChange={handleInputChange}
 							placeholder="Type your message..."
 							disabled={pendingToolCallConfirmation}
-							className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none transition-colors focus:border-transparent focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+							className="w-full rounded-lg border border-gray-300 px-4 py-3 transition-colors outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
 						/>
 					</div>
 					<button
