@@ -1,36 +1,15 @@
-import { createActor, type ActorRefFrom } from 'xstate'
-import { useSelector } from '@xstate/react'
-import { chatMachine } from '../lib/chat-machine'
-import { type Route } from './+types/chat'
+import { useEffect } from 'react'
+import { useChat } from '../lib/use-chat'
 import { useAutoScroll } from '../lib/use-autoscroll'
 
-export async function clientLoader() {
-	const actor = createActor(chatMachine, {
-		input: {
-			initialLogLevel: 'debug',
-		},
-	})
-	actor.start()
-
-	// @ts-expect-error - 😈
-	window.actor = actor
-
-	// Trigger model loading
-	actor.send({
-		type: 'LOAD_MODEL',
-		modelId: 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
-	})
-
-	return { actor }
-}
-
-export default function Chat({ loaderData }: Route.ComponentProps) {
-	const { actor } = loaderData
+export default function ChatNew() {
+	const { state, loadModel, addMessage, clearError } = useChat()
 	const { containerRef, scrollTargetRef } = useAutoScroll()
 
-	// Get state and context from the machine
-	const state = useSelector(actor, (snapshot) => snapshot)
-	const context = state.context
+	// Load model on mount
+	useEffect(() => {
+		loadModel('Llama-3.1-8B-Instruct-q4f32_1-MLC')
+	}, [loadModel])
 
 	// Handle form submission
 	function handleSubmit(e: React.FormEvent) {
@@ -40,9 +19,14 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 		const message = String(formData.get('message')).trim()
 
 		if (message) {
-			actor.send({ type: 'ADD_MESSAGE', content: message })
+			addMessage(message)
 			form.reset()
 		}
+	}
+
+	// Handle error dismissal
+	function handleErrorDismiss() {
+		clearError()
 	}
 
 	return (
@@ -53,25 +37,25 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 					<div className="flex items-center space-x-4">
 						<div>
 							<h1 className="text-xl font-semibold text-gray-900 dark:text-white">
-								Chat Assistant
+								Chat Assistant (New)
 							</h1>
 							<p className="text-sm text-gray-600 dark:text-gray-400">
-								{context.currentModelId
-									? `Using ${context.currentModelId}`
+								{state.currentModelId
+									? `Using ${state.currentModelId}`
 									: 'No model loaded'}
 							</p>
 						</div>
 						{/* Loading indicator */}
-						{state.matches('loadingModel') ? (
+						{state.status === 'loadingModel' ? (
 							<div className="flex items-center space-x-2 rounded-lg bg-blue-50 px-3 py-2 dark:bg-blue-900/20">
 								<div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"></div>
 								<span className="text-sm font-medium text-blue-700 dark:text-blue-300">
-									Loading {Math.round(context.modelLoadProgress.value * 100)}%
+									Loading {Math.round(state.modelLoadProgress.value * 100)}%
 								</span>
 							</div>
 						) : null}
 						{/* State indicator */}
-						{state.matches('generating') ? (
+						{state.status === 'generating' ? (
 							<div className="flex items-center space-x-2 rounded-lg bg-green-50 px-3 py-2 dark:bg-green-900/20">
 								<div className="h-4 w-4 animate-spin rounded-full border-2 border-green-600 border-t-transparent"></div>
 								<span className="text-sm font-medium text-green-700 dark:text-green-300">
@@ -84,11 +68,19 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 			</header>
 
 			{/* Error Display */}
-			{context.lastError ? (
+			{state.lastError ? (
 				<div className="border border-red-200 bg-red-50 px-6 py-3 dark:border-red-800 dark:bg-red-900/20">
-					<p className="text-sm text-red-800 dark:text-red-200">
-						{context.lastError.message}
-					</p>
+					<div className="flex items-center justify-between">
+						<p className="text-sm text-red-800 dark:text-red-200">
+							{state.lastError.message}
+						</p>
+						<button
+							onClick={handleErrorDismiss}
+							className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200"
+						>
+							×
+						</button>
+					</div>
 				</div>
 			) : null}
 
@@ -97,9 +89,9 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 				ref={containerRef}
 				className="flex-1 space-y-4 overflow-y-auto px-6 py-4"
 			>
-				{context.messages.length === 0 &&
-				context.queuedMessages.length === 0 &&
-				!state.matches('generating') ? (
+				{state.messages.length === 0 &&
+				state.queuedMessages.length === 0 &&
+				state.status !== 'generating' ? (
 					<div className="flex justify-center">
 						<div className="rounded-lg border border-gray-200 bg-white px-4 py-2 dark:border-gray-700 dark:bg-gray-800">
 							<p className="text-sm text-gray-600 dark:text-gray-400">
@@ -109,7 +101,7 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 					</div>
 				) : null}
 
-				{context.messages.map((message) => (
+				{state.messages.map((message) => (
 					<div
 						key={message.id}
 						className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -160,17 +152,17 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 				))}
 
 				{/* Queued messages */}
-				{context.queuedMessages.length > 0 ? (
+				{state.queuedMessages.length > 0 ? (
 					<div className="space-y-2">
 						<div className="flex justify-center">
 							<div className="rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-1 dark:border-yellow-800 dark:bg-yellow-900/20">
 								<p className="text-xs text-yellow-800 dark:text-yellow-200">
-									{context.queuedMessages.length} message
-									{context.queuedMessages.length > 1 ? 's' : ''} queued
+									{state.queuedMessages.length} message
+									{state.queuedMessages.length > 1 ? 's' : ''} queued
 								</p>
 							</div>
 						</div>
-						{context.queuedMessages.map((message) => (
+						{state.queuedMessages.map((message) => (
 							<div key={message.id} className="flex justify-end">
 								<div className="max-w-sm rounded-lg bg-blue-600 px-4 py-2 text-white opacity-60 lg:max-w-md">
 									<div className="flex items-center space-x-2">
@@ -205,23 +197,25 @@ export default function Chat({ loaderData }: Route.ComponentProps) {
 							type="text"
 							name="message"
 							placeholder={
-								context.queuedMessages.length > 0
-									? `Message will be queued (${context.queuedMessages.length} already queued)...`
-									: state.matches('idle') || state.matches('loadingModel')
+								state.queuedMessages.length > 0
+									? `Message will be queued (${state.queuedMessages.length} already queued)...`
+									: state.status === 'idle' || state.status === 'loadingModel'
 										? 'Waiting for model to load...'
 										: 'Type your message...'
 							}
-							className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-gray-900 placeholder-gray-500 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+							disabled={state.status === 'idle'}
+							className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-gray-900 placeholder-gray-500 focus:border-transparent focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
 						/>
 					</div>
 					<button
 						type="submit"
+						disabled={state.status === 'idle'}
 						className="rounded-lg bg-blue-600 px-6 py-2 text-white transition-colors hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 					>
-						{state.value === 'loadingModel'
+						{state.status === 'loadingModel'
 							? 'Queue'
-							: context.queuedMessages.length > 0
-								? `Queue (${context.queuedMessages.length})`
+							: state.queuedMessages.length > 0
+								? `Queue (${state.queuedMessages.length})`
 								: 'Send'}
 					</button>
 				</form>
@@ -250,10 +244,10 @@ export function HydrateFallback() {
 
 export function meta() {
 	return [
-		{ title: 'Chat Assistant' },
+		{ title: 'Chat Assistant (New)' },
 		{
 			name: 'description',
-			content: 'Chat with our AI assistant powered by WebLLM',
+			content: 'Chat with our AI assistant powered by WebLLM using useReducer',
 		},
 	]
 }
