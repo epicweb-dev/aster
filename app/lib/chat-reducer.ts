@@ -180,7 +180,7 @@ export const initialChatState: ChatState = {
 	},
 	messages: [],
 	queuedMessages: [],
-	logLevel: 'silent',
+	logLevel: 'debug',
 	toolCallRequests: {},
 }
 
