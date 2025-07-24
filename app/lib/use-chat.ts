@@ -158,7 +158,7 @@ Only call tools when necessary to help the user.`,
 				abortControllerRef.current.abort()
 			}
 		}
-	}, [state.status, state.engine, state.messages.length])
+	}, [state.status, state.engine])
 
 	// Cleanup on unmount
 	useEffect(() => {
