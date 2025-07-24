@@ -7,12 +7,11 @@ on:
     branches: [main, develop]
 
 jobs:
-  ci:
-    name: Test, Typecheck & Build
+  test:
+    name: 🧪 Run tests
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -20,6 +19,14 @@ jobs:
         with:
           node-version: 24
           cache: 'npm'
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
 
       - name: Install dependencies
         run: npm ci
@@ -30,8 +37,56 @@ jobs:
           # Ensure tests run in CI mode
           CI: true
 
+  typecheck:
+    name: 🔍 Type check
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Run typecheck
         run: npm run typecheck
+
+  build:
+    name: 🏗️ Build application
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build application
         run: npm run build
@@ -48,7 +103,7 @@ jobs:
           echo "Server build size:"
           du -sh build/server/
 
-      - name: Upload build artifacts
+      - name: 📦 Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
