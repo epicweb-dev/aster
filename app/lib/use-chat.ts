@@ -18,27 +18,22 @@ export function useChat() {
 			const { CreateWebWorkerMLCEngine } = await import('@mlc-ai/web-llm')
 
 			// Create Web Worker for heavy computation
-			const worker = new Worker(
-				new URL('./worker.ts', import.meta.url),
-				{ type: 'module' }
-			)
+			const worker = new Worker(new URL('./worker.ts', import.meta.url), {
+				type: 'module',
+			})
 
 			// Create engine with Web Worker and IndexedDB caching
-			const engine = await CreateWebWorkerMLCEngine(
-				worker,
-				modelId,
-				{
-					initProgressCallback: (progress) => {
-						dispatch({
-							type: 'MODEL_LOAD_PROGRESS',
-							payload: { progress: progress.progress },
-						})
-					},
-					appConfig: {
-						useIndexedDB: true,
-					},
-				}
-			)
+			const engine = await CreateWebWorkerMLCEngine(worker, modelId, {
+				initProgressCallback: (progress) => {
+					dispatch({
+						type: 'MODEL_LOAD_PROGRESS',
+						payload: { progress: progress.progress },
+					})
+				},
+				appConfig: {
+					useIndexedDB: true,
+				},
+			})
 
 			engineRef.current = engine
 			dispatch({ type: 'MODEL_LOAD_SUCCESS', payload: { engine } })
