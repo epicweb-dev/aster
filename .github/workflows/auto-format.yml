@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -81,7 +82,7 @@ jobs:
           - Code formatting fixes
           - Consistent indentation
           - Proper line endings"
-          git push
+          git push origin HEAD:${{ github.head_ref || github.ref_name }}
 
       - name: Comment on PR
         if:
