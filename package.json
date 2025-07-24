@@ -9,6 +9,8 @@
   "scripts": {
     "test": "vitest --no-watch",
     "test:watch": "vitest --watch",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "build": "react-router build",
     "deploy": "npm run build && wrangler deploy",
     "dev": "react-router dev",
@@ -34,6 +36,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.10.0",
     "@epic-web/config": "^1.21.0",
+    "@playwright/test": "^1.54.1",
     "@react-router/dev": "^7.7.0",
     "@tailwindcss/vite": "^4.1.11",
     "@testing-library/react": "^16.3.0",

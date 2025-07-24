@@ -1,16 +1,93 @@
 @import 'tailwindcss' source('.');
 
+html,
+body {
+	background-color: var(--color-background);
+	color: var(--color-foreground);
+	border-color: var(--color-border);
+	color-scheme: light dark;
+}
+
 @theme {
 	--font-sans:
 		'Inter', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji',
 		'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
 }
 
-html,
-body {
-	@apply bg-white dark:bg-gray-950;
+:root {
+	--color-primary: #7c3aed;
+	--color-primary-foreground: #ffffff;
+	--color-secondary: #f3f4f6;
+	--color-secondary-foreground: #1f2937;
+	--color-accent: #8b5cf6;
+	--color-accent-foreground: #ffffff;
+	--color-background: #faf5ff;
+	--color-foreground: #0f172a;
+	--color-muted: #f3e8ff;
+	--color-muted-foreground: #64748b;
+	--color-border: #e2e8f0;
+	--color-input: #ffffff;
+	--color-input-foreground: #0f172a;
+	--color-ring: #7c3aed;
+	--color-success: #10b981;
+	--color-success-foreground: #ffffff;
+	--color-warning: #f59e0b;
+	--color-warning-foreground: #ffffff;
+	--color-danger: #ef4444;
+	--color-danger-foreground: #ffffff;
+	--color-info: #3b82f6;
+	--color-info-foreground: #ffffff;
+}
 
-	@media (prefers-color-scheme: dark) {
-		color-scheme: dark;
+/* Dark mode colors */
+@media (prefers-color-scheme: dark) {
+	:root {
+		--color-primary: #a855f7;
+		--color-primary-foreground: #ffffff;
+		--color-secondary: #1e293b;
+		--color-secondary-foreground: #f1f5f9;
+		--color-accent: #c084fc;
+		--color-accent-foreground: #ffffff;
+		--color-background: #1a1625;
+		--color-foreground: #f8fafc;
+		--color-muted: #2d1b69;
+		--color-muted-foreground: #94a3b8;
+		--color-border: #334155;
+		--color-input: #1e293b;
+		--color-input-foreground: #f8fafc;
+		--color-ring: #a855f7;
+		--color-success: #22c55e;
+		--color-success-foreground: #ffffff;
+		--color-warning: #fbbf24;
+		--color-warning-foreground: #ffffff;
+		--color-danger: #f87171;
+		--color-danger-foreground: #ffffff;
+		--color-info: #60a5fa;
+		--color-info-foreground: #ffffff;
 	}
+}
+
+@theme inline {
+	--color-primary: var(--color-primary);
+	--color-primary-foreground: var(--color-primary-foreground);
+	--color-secondary: var(--color-secondary);
+	--color-secondary-foreground: var(--color-secondary-foreground);
+	--color-accent: var(--color-accent);
+	--color-accent-foreground: var(--color-accent-foreground);
+	--color-background: var(--color-background);
+	--color-foreground: var(--color-foreground);
+	--color-muted: var(--color-muted);
+	--color-muted-foreground: var(--color-muted-foreground);
+	--color-border: var(--color-border);
+	--color-input: var(--color-input);
+	--color-input-foreground: var(--color-input-foreground);
+	--color-ring: var(--color-ring);
+	--color-success: var(--color-success);
+	--color-success-foreground: var(--color-success-foreground);
+	--color-warning: var(--color-warning);
+	--color-warning-foreground: var(--color-warning-foreground);
+	--color-danger: var(--color-danger);
+	--color-danger-foreground: var(--color-danger-foreground);
+	--color-info: var(--color-info);
+	--color-info-foreground: var(--color-info-foreground);
 }

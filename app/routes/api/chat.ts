@@ -21,8 +21,6 @@ export async function action({ request, context }: Route.ActionArgs) {
 	const rawBody = await request.json()
 	const { messages } = RequestSchema.parse(rawBody)
 
-	console.log('Received messages:', messages, tools)
-
 	const anthropic = createAnthropic({
 		apiKey: context.cloudflare.env.ANTHROPIC_API_KEY,
 	})

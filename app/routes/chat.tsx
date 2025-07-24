@@ -27,8 +27,7 @@ function useChat() {
 }
 
 function Chat() {
-	const { messages, input, handleInputChange, handleSubmit, addToolResult } =
-		useChat()
+	const { messages, input, handleInputChange, handleSubmit } = useChat()
 	const toolsRequiringConfirmation = getToolsRequiringConfirmation(tools)
 
 	// Used to disable input while confirmation is pending
@@ -42,13 +41,11 @@ function Chat() {
 	)
 
 	return (
-		<div className="flex h-screen flex-col bg-gray-50">
+		<div className="bg-muted flex h-screen flex-col">
 			{/* Header */}
-			<div className="border-b border-gray-200 bg-white px-6 py-4">
-				<h1 className="text-xl font-semibold text-gray-900">
-					AI Chat Assistant
-				</h1>
-				<p className="mt-1 text-sm text-gray-600">Ask me anything!</p>
+			<div className="border-border bg-background border-b px-6 py-4">
+				<h1 className="text-foreground text-xl font-semibold">Aster Chat</h1>
+				<p className="text-muted-foreground mt-1 text-sm">Ask me anything!</p>
 			</div>
 
 			{/* Messages Container */}
@@ -56,9 +53,9 @@ function Chat() {
 				{messages.length === 0 ? (
 					<div className="flex h-full items-center justify-center">
 						<div className="text-center">
-							<div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100">
+							<div className="bg-primary/10 mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full">
 								<svg
-									className="h-8 w-8 text-blue-600"
+									className="text-primary h-8 w-8"
 									fill="none"
 									stroke="currentColor"
 									viewBox="0 0 24 24"
@@ -71,11 +68,11 @@ function Chat() {
 									/>
 								</svg>
 							</div>
-							<h3 className="mb-2 text-lg font-medium text-gray-900">
+							<h3 className="text-foreground mb-2 text-lg font-medium">
 								Start a conversation
 							</h3>
-							<p className="text-gray-600">
-								Type a message below to begin chatting with the AI assistant.
+							<p className="text-muted-foreground">
+								Type a message below to begin chatting with Aster.
 							</p>
 						</div>
 					</div>
@@ -87,7 +84,7 @@ function Chat() {
 			</div>
 
 			{/* Input Form */}
-			<div className="border-t border-gray-200 bg-white px-6 py-4">
+			<div className="border-border bg-background border-t px-6 py-4">
 				<form onSubmit={handleSubmit} className="flex space-x-4">
 					<div className="flex-1">
 						<input
@@ -96,13 +93,13 @@ function Chat() {
 							onChange={handleInputChange}
 							placeholder="Type your message..."
 							disabled={pendingToolCallConfirmation}
-							className="w-full rounded-lg border border-gray-300 px-4 py-3 transition-colors outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+							className="bg-input text-input-foreground focus:border-ring focus:ring-ring w-full rounded-lg border px-4 py-3 transition-colors outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
 						/>
 					</div>
 					<button
 						type="submit"
 						disabled={!input.trim() || pendingToolCallConfirmation}
-						className="rounded-lg bg-blue-600 px-6 py-3 font-medium text-white transition-colors hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+						className="bg-primary text-primary-foreground hover:bg-primary/90 focus:ring-ring rounded-lg px-6 py-3 font-medium transition-colors focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						Send
 					</button>
@@ -121,8 +118,8 @@ function Message({ message }: { message: UIMessage }) {
 			<div
 				className={`max-w-xs rounded-lg px-4 py-2 lg:max-w-md ${
 					message.role === 'user'
-						? 'bg-blue-600 text-white'
-						: 'border border-gray-200 bg-white text-gray-900'
+						? 'bg-primary text-primary-foreground'
+						: 'border-border bg-background text-foreground border'
 				}`}
 			>
 				<div className="mb-1 text-sm font-medium">
@@ -151,17 +148,17 @@ function ToolInvocation({ invocation }: { invocation: ToolInvocation }) {
 	const { addToolResult } = useChat()
 	const { toolName, state, args, toolCallId } = invocation
 	const toolsRequiringConfirmation = getToolsRequiringConfirmation(tools)
-	const dynamicInfoStyles = 'font-mono bg-gray-100 p-1 text-sm'
+	const dynamicInfoStyles = 'font-mono bg-muted p-1 text-sm'
 
 	// Render confirmation UI for tools that require confirmation
 	if (toolsRequiringConfirmation.includes(toolName) && state === 'call') {
 		return (
-			<div className="mt-2 text-gray-500">
+			<div className="text-muted-foreground mt-2">
 				Run <span className={dynamicInfoStyles}>{toolName}</span> with args:{' '}
 				<span className={dynamicInfoStyles}>{JSON.stringify(args)}</span>
 				<div className="flex gap-2 pt-2">
 					<button
-						className="rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700"
+						className="bg-success text-success-foreground hover:bg-success/90 rounded px-4 py-2 font-bold"
 						onClick={() =>
 							addToolResult({
 								toolCallId,
@@ -172,7 +169,7 @@ function ToolInvocation({ invocation }: { invocation: ToolInvocation }) {
 						Yes
 					</button>
 					<button
-						className="rounded bg-red-500 px-4 py-2 font-bold text-white hover:bg-red-700"
+						className="bg-danger text-danger-foreground hover:bg-danger/90 rounded px-4 py-2 font-bold"
 						onClick={() =>
 							addToolResult({
 								toolCallId,
@@ -190,7 +187,7 @@ function ToolInvocation({ invocation }: { invocation: ToolInvocation }) {
 	// Show tool result
 	if (state === 'result' && invocation.result) {
 		return (
-			<div className="mt-2 rounded bg-gray-50 p-2 text-sm">
+			<div className="bg-muted mt-2 rounded p-2 text-sm">
 				<strong>Tool Result:</strong> {invocation.result}
 			</div>
 		)
@@ -205,4 +202,12 @@ export default function ChatPage() {
 			<Chat />
 		</ChatProvider>
 	)
+}
+
+export function meta() {
+	return [
+		{
+			title: 'Aster Chat',
+		},
+	]
 }
