@@ -13,8 +13,6 @@ export default function ChatNew() {
 		loadModel,
 		addMessage,
 		clearError,
-		approveToolCall,
-		rejectToolCall,
 		approveToolRequest,
 		rejectToolRequest,
 	} = useChat()

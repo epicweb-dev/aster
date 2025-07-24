@@ -64,9 +64,20 @@ describe('Tool Call Integration', () => {
 		})
 		expect(state.streamBuffer).toBeUndefined()
 
-		// User approves the tool call
+		// User approves the tool call (using old system for this test)
 		state = chatReducer(state, {
-			type: 'APPROVE_TOOL_CALL',
+			type: 'PENDING_TOOL_CALL',
+			payload: {
+				toolCall: { name: 'search', arguments: { query: 'React hooks' } },
+				bufferedContent: `[TOOL_CALL:${toolBoundaryId}]{"name": "search", "arguments": {"query": "React hooks"}}[/TOOL_CALL:${toolBoundaryId}]`,
+			},
+		})
+
+		// Get the request ID from the created tool call request
+		const requestId = Object.keys(state.toolCallRequests)[0]
+		state = chatReducer(state, {
+			type: 'APPROVE_TOOL_REQUEST',
+			payload: { requestId },
 		})
 
 		expect(state.status).toBe('executingTool')

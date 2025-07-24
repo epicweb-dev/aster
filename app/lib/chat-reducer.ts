@@ -133,12 +133,6 @@ export type ChatAction =
 			}
 	  }
 	| {
-			type: 'APPROVE_TOOL_CALL'
-	  }
-	| {
-			type: 'REJECT_TOOL_CALL'
-	  }
-	| {
 			type: 'TOOL_EXECUTION_SUCCESS'
 			payload: {
 				toolCall: {
@@ -377,8 +371,7 @@ const eventLogLevels = {
 	GENERATION_ERROR: 'error',
 	CLEAR_ERROR: 'info',
 	PENDING_TOOL_CALL: 'info',
-	APPROVE_TOOL_CALL: 'info',
-	REJECT_TOOL_CALL: 'info',
+
 	TOOL_EXECUTION_SUCCESS: 'info',
 	TOOL_EXECUTION_ERROR: 'error',
 	TOOL_EXECUTION_TIMEOUT: 'warn',
@@ -713,29 +706,6 @@ function chatReducerImpl(state: ChatState, action: ChatAction): ChatState {
 					...state.toolCallRequests,
 					[requestId]: toolCallRequest,
 				},
-			}
-		}
-
-		case 'APPROVE_TOOL_CALL':
-			return {
-				...state,
-				status: 'executingTool',
-				pendingToolCall: undefined,
-				bufferedToolContent: undefined,
-			}
-
-		case 'REJECT_TOOL_CALL': {
-			const bufferedContent = state.bufferedToolContent || ''
-			return {
-				...state,
-				status: 'generating',
-				pendingToolCall: undefined,
-				bufferedToolContent: undefined,
-				messages: state.messages.map((msg) =>
-					msg.id === state.assistantMessageId
-						? { ...msg, content: msg.content + bufferedContent }
-						: msg,
-				),
 			}
 		}
 

@@ -8,23 +8,37 @@ export function useChat() {
 	const [state, dispatch] = useReducer(chatReducer, initialChatState)
 	const engineRef = useRef<MLCEngine | undefined>(undefined)
 	const abortControllerRef = useRef<AbortController | undefined>(undefined)
+	const generationStartedRef = useRef<boolean>(false)
 
 	// Handle model loading
 	const loadModel = useCallback(async (modelId: string) => {
 		try {
 			dispatch({ type: 'LOAD_MODEL', payload: { modelId } })
 
-			const { CreateMLCEngine } = await import('@mlc-ai/web-llm')
+			const { CreateWebWorkerMLCEngine } = await import('@mlc-ai/web-llm')
 
-			// Create engine with progress callback
-			const engine = await CreateMLCEngine(modelId, {
-				initProgressCallback: (progress) => {
-					dispatch({
-						type: 'MODEL_LOAD_PROGRESS',
-						payload: { progress: progress.progress },
-					})
-				},
-			})
+			// Create Web Worker for heavy computation
+			const worker = new Worker(
+				new URL('./worker.ts', import.meta.url),
+				{ type: 'module' }
+			)
+
+			// Create engine with Web Worker and IndexedDB caching
+			const engine = await CreateWebWorkerMLCEngine(
+				worker,
+				modelId,
+				{
+					initProgressCallback: (progress) => {
+						dispatch({
+							type: 'MODEL_LOAD_PROGRESS',
+							payload: { progress: progress.progress },
+						})
+					},
+					appConfig: {
+						useIndexedDB: true,
+					},
+				}
+			)
 
 			engineRef.current = engine
 			dispatch({ type: 'MODEL_LOAD_SUCCESS', payload: { engine } })
@@ -92,8 +106,15 @@ export function useChat() {
 	// Handle message generation
 	useEffect(() => {
 		if (state.status !== 'generating' || !state.engine) {
+			generationStartedRef.current = false
 			return
 		}
+
+		// Prevent multiple generations from running simultaneously
+		if (generationStartedRef.current) {
+			return
+		}
+		generationStartedRef.current = true
 
 		const generateResponse = async () => {
 			try {
@@ -128,14 +149,13 @@ export function useChat() {
 				const messagesForCompletion =
 					removeMessagesAfterLastUserOrToolMessage(messages)
 
-				// Update status to searching
+				// Update status to searching (without triggering effect re-run)
 				dispatch({ type: 'SET_STATUS', payload: { status: 'searching' } })
 
 				// Search for relevant tools
 				const searchResults = await search(messagesForCompletion)
 
-				// Update status back to generating
-				dispatch({ type: 'SET_STATUS', payload: { status: 'generating' } })
+				// Don't dispatch status back to generating - let the streaming handle it
 				const tools = searchResults.map((tool) => ({
 					id: tool.id,
 					llmDescription: tool.llmDescription,
@@ -200,6 +220,8 @@ Only call tools when necessary to help the user.`,
 						payload: { error },
 					})
 				}
+			} finally {
+				generationStartedRef.current = false
 			}
 		}
 
@@ -232,14 +254,6 @@ Only call tools when necessary to help the user.`,
 		dispatch({ type: 'CLEAR_ERROR' })
 	}, [])
 
-	const approveToolCall = useCallback(() => {
-		dispatch({ type: 'APPROVE_TOOL_CALL' })
-	}, [])
-
-	const rejectToolCall = useCallback(() => {
-		dispatch({ type: 'REJECT_TOOL_CALL' })
-	}, [])
-
 	const approveToolRequest = useCallback((requestId: string) => {
 		dispatch({ type: 'APPROVE_TOOL_REQUEST', payload: { requestId } })
 	}, [])
@@ -253,8 +267,6 @@ Only call tools when necessary to help the user.`,
 		loadModel,
 		addMessage,
 		clearError,
-		approveToolCall,
-		rejectToolCall,
 		approveToolRequest,
 		rejectToolRequest,
 	}
