@@ -109,6 +109,7 @@ export function useChat() {
 
 	const generateResponse = useCallback(async () => {
 		if (!state.engine) {
+			console.warn('cannot generate response: no engine')
 			return
 		}
 
@@ -121,6 +122,7 @@ export function useChat() {
 			abortControllerRef.current = new AbortController()
 			const signal = abortControllerRef.current.signal
 
+			debugger
 			// Convert messages to the format expected by the engine
 			const messages: Array<ChatCompletionMessageParam> = state.messages
 				.filter((msg) => msg.role !== 'assistant' || msg.content.trim() !== '')
@@ -182,21 +184,26 @@ Important: Only use the exact tool names and argument structures shown above.`,
 			const allMessages = [...systemMessages, ...messagesForCompletion]
 
 			// Create streaming chat completion
+			console.log('creating stream with messages', { messages: allMessages })
 			const stream = await state.engine.chat.completions.create({
 				messages: allMessages,
 				stream: true,
 				temperature: 0.7,
 				max_tokens: 1000,
 			})
+			console.log('stream created')
 
 			for await (const chunk of stream) {
 				if (signal.aborted) {
+					console.warn('stream aborted')
 					break
 				}
 
 				const content = chunk.choices[0]?.delta?.content || ''
 				if (content) {
 					dispatch({ type: 'STREAM_CHUNK', payload: { chunk: content } })
+				} else {
+					console.warn('no content in chunk', chunk)
 				}
 			}
 
