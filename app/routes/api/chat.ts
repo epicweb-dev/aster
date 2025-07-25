@@ -47,10 +47,11 @@ export async function action({ request, context }: Route.ActionArgs) {
 
 			const result = streamText({
 				model: anthropic('claude-3-5-sonnet-20240620'),
-				system: 'You are a helpful assistant.',
+				system: 'You are a terse assistant.',
 				messages: processedMessages,
 				tools,
 				maxSteps: 10,
+				maxTokens: 1000,
 			})
 
 			result.mergeIntoDataStream(dataStream)

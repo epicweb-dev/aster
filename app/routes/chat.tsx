@@ -12,7 +12,6 @@ const ChatContext = createContext<ReturnType<typeof useChatBase> | null>(null)
 function ChatProvider({ children }: { children: React.ReactNode }) {
 	const chat = useChatBase({
 		api: '/api/chat',
-		maxSteps: 5,
 	})
 
 	return <ChatContext.Provider value={chat}>{children}</ChatContext.Provider>
@@ -27,7 +26,7 @@ function useChat() {
 }
 
 function Chat() {
-	const { messages, input, handleInputChange, handleSubmit } = useChat()
+	const { messages, input, handleInputChange, handleSubmit, error } = useChat()
 	const toolsRequiringConfirmation = getToolsRequiringConfirmation(tools)
 
 	// Used to disable input while confirmation is pending
@@ -81,6 +80,11 @@ function Chat() {
 						<Message key={message.id} message={message} />
 					))
 				)}
+				{error ? (
+					<div className="bg-danger text-danger-foreground rounded-lg p-4">
+						{error.message}
+					</div>
+				) : null}
 			</div>
 
 			{/* Input Form */}
@@ -88,6 +92,7 @@ function Chat() {
 				<form onSubmit={handleSubmit} className="flex space-x-4">
 					<div className="flex-1">
 						<input
+							autoFocus
 							value={input}
 							name="prompt"
 							onChange={handleInputChange}
